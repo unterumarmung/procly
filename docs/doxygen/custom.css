@@ -1,0 +1,5 @@
+/* Override doxygen-awesome-css variables here (keeps upgrades easy). */
+:root {
+  /* Example: widen the sidebar a bit */
+  --side-nav-fixed-width: 320px;
+}

@@ -1,0 +1,104 @@
+# Currently bazel-lib is only load()ed when platforms is used.
+bazel_dep(name = "bazel_lib", version = "3.0.0")
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "apple_support", version = "2.1.0")
+bazel_dep(name = "aspect_rules_lint", version = "2.0.0-rc0")
+bazel_dep(name = "buildifier_prebuilt", version = "8.2.1.1")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "rules_multitool", version = "1.11.1")
+bazel_dep(name = "bazel_env.bzl", version = "0.5.0")
+bazel_dep(name = "bazelrc-preset.bzl", version = "1.8.0")
+
+bazel_dep(name = "rules_doxygen", version = "2.6.1", dev_dependency = True)
+
+# We have to take a dependency on rules_python in order to set bootstrap=script
+# for transitive dependencies, even if there are no Python rules used in this repo.
+# See .bazelrc
+bazel_dep(name = "rules_python", version = "1.7.0")
+bazel_dep(name = "gazelle", version = "0.47.0")
+bazel_dep(name = "googletest", version = "1.14.0")
+
+doxygen_extension = use_extension("@rules_doxygen//:extensions.bzl", "doxygen_extension")
+use_repo(doxygen_extension, "doxygen")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "doxygen_awesome_css",
+    # TODO: fill in the sha256 after the first fetch (Bazel will print it).
+    # sha256 = "",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "awesome_css",
+    srcs = ["doxygen-awesome.css"],
+)
+
+filegroup(
+    name = "awesome_sidebar_css",
+    srcs = ["doxygen-awesome-sidebar-only.css"],
+)
+
+filegroup(
+    name = "awesome_darkmode_toggle_css",
+    srcs = ["doxygen-awesome-sidebar-only-darkmode-toggle.css"],
+)
+
+filegroup(
+    name = "awesome_darkmode_toggle_js",
+    srcs = ["doxygen-awesome-darkmode-toggle.js"],
+)
+
+filegroup(
+    name = "awesome_copy_js",
+    srcs = ["doxygen-awesome-fragment-copy-button.js"],
+)
+
+filegroup(
+    name = "awesome_paralink_js",
+    srcs = ["doxygen-awesome-paragraph-link.js"],
+)
+""",
+    strip_prefix = "doxygen-awesome-css-2.4.1",
+    urls = [
+        "https://github.com/jothepro/doxygen-awesome-css/archive/refs/tags/v2.4.1.zip",
+    ],
+)
+
+multitool = use_extension("@rules_multitool//multitool:extension.bzl", "multitool")
+multitool.hub(lockfile = "//tools:tools.lock.json")
+use_repo(multitool, "multitool")
+
+bazel_dep(name = "rules_cc", version = "0.2.16")
+bazel_dep(name = "toolchains_llvm", version = "1.6.0")
+
+#########################
+# Hermetic C++ toolchain, to relieve the dependency on a locally installed CC etc.
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+llvm.toolchain(
+    # NB: llvm doesn't release for all platforms on every patch release
+    llvm_versions = {
+        "": "15.0.6",
+        "darwin-aarch64": "15.0.7",
+        "darwin-x86_64": "15.0.7",
+    },
+)
+use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
+
+register_toolchains("@llvm_toolchain//:all")
+
+single_version_override(
+    module_name = "googletest",
+    patch_strip = 0,
+    patches = ["//tools/patches:googletest_bazel8.patch"],
+    version = "1.14.0",
+)
+
+# bazel run @hedron_compile_commands//:refresh_all
+bazel_dep(name = "hedron_compile_commands", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+)

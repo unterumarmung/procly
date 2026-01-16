@@ -1,0 +1,10 @@
+package(default_visibility = ["//visibility:public"])
+
+sh_binary(
+    name = "darwin_san_run_under",
+    srcs = ["darwin_san_run_under.sh"],
+    data = [
+        "@llvm_toolchain_llvm//:clang",
+        "@llvm_toolchain_llvm//:lib",
+    ],
+)
