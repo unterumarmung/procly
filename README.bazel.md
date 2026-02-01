@@ -4,7 +4,8 @@ This repository uses [Aspect Workflows](https://aspect.build) to provide an exce
 
 ## Formatting code
 
-Run `bazel run //tools:bazel_env`, then add `bazel-out/bazel_env-opt/bin/tools/bazel_env/bin` to your PATH (direnv via `.envrc` or manual export). The `format` command is provided by the bazel-env setup.
+Install direnv first (see `https://direnv.net`). Run `bazel run //tools:bazel_env` and then `direnv allow`; by default it expects direnv via `.envrc`. The `format` command is provided by the bazel-env setup.
+CI uses `bazel run //tools:bazel_env print-path` to set PATH without direnv.
 
 - Run `format` to re-format all files locally.
 - Run `format path/to/file` to re-format a single file.
@@ -21,7 +22,7 @@ The Aspect CLI provides the [`lint` command](https://docs.aspect.build/cli/comma
 The command collects the correct report files, presents them with colored boundaries, gives you interactive suggestions to apply fixes, produces a matching exit code, and more.
 
 - Run `aspect lint //...` to check for lint violations.
-- Run `aspect lint --fix` to apply fixes; a non-zero exit code means the lint failed.
+- Run `aspect lint --fix` to apply fixes.
 
 ## Installing dev tools
 

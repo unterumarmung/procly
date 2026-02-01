@@ -28,8 +28,7 @@ jobs:
 
       - name: Prepare bazel-env
         run: |
-          bazel run //tools:bazel_env
-          echo "$PWD/bazel-out/bazel_env-opt/bin/tools/bazel_env/bin" >> "$GITHUB_PATH"
+          bazel run //tools:bazel_env print-path >> "$GITHUB_PATH"
 
       - name: Format (must be clean)
         run: |

@@ -218,16 +218,16 @@ bazel test //...
 
 ### Format
 
-`bazel run //tools:bazel_env` creates the bazel-env tool bin dir used by `format`.
+`bazel run //tools:bazel_env` creates the bazel-env tool bin dir used by `format` and relies on direnv by default.
+Install direnv first (see `https://direnv.net`).
 
 ```sh
 bazel run //tools:bazel_env
 ```
 
 ```sh
-export PATH="$PWD/bazel-out/bazel_env-opt/bin/tools/bazel_env/bin:$PATH"
+direnv allow
 ```
-If you use direnv, `direnv allow` does this for you.
 
 ```sh
 format
@@ -244,7 +244,6 @@ aspect lint
 ```sh
 aspect lint --fix
 ```
-A non-zero exit code means lint failed.
 
 ### Docs
 
