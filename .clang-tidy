@@ -16,3 +16,4 @@ Checks: >-
 WarningsAsErrors: true
 
 HeaderFilterRegex: '(^|.*/)(include/procly/|src/|tests/).*'
+SystemHeaders: false

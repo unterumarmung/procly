@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include "procly/command.hpp"
@@ -9,7 +10,7 @@
 
 namespace procly::internal {
 
-enum class SpawnMode { spawn, output };
+enum class SpawnMode : std::uint8_t { spawn, output };
 
 struct StdioOverride {
   std::optional<Stdio> stdin_override;

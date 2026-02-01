@@ -105,7 +105,7 @@ static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::
       if (!pipeline_pgid) {
         spec.opts.new_process_group = true;
       } else {
-        spec.process_group = *pipeline_pgid;
+        spec.process_group = pipeline_pgid;
       }
     }
 
@@ -222,7 +222,7 @@ std::optional<PipeReader> PipelineChild::take_stderr() noexcept {
 
 Result<PipelineStatus> PipelineChild::wait() {
   if (!impl_) {
-    return Error{make_error_code(errc::wait_failed), "wait"};
+    return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
 
   PipelineStatus status;
@@ -238,7 +238,7 @@ Result<PipelineStatus> PipelineChild::wait() {
   }
 
   if (status.stages.empty()) {
-    return Error{make_error_code(errc::invalid_pipeline), "wait"};
+    return Error{.code = make_error_code(errc::invalid_pipeline), .context = "wait"};
   }
 
   if (!impl_->pipefail) {
@@ -258,7 +258,7 @@ Result<PipelineStatus> PipelineChild::wait() {
 
 Result<void> PipelineChild::terminate() {
   if (!impl_) {
-    return Error{make_error_code(errc::kill_failed), "terminate"};
+    return Error{.code = make_error_code(errc::kill_failed), .context = "terminate"};
   }
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {
@@ -276,7 +276,7 @@ Result<void> PipelineChild::terminate() {
 
 Result<void> PipelineChild::kill() {
   if (!impl_) {
-    return Error{make_error_code(errc::kill_failed), "kill"};
+    return Error{.code = make_error_code(errc::kill_failed), .context = "kill"};
   }
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {

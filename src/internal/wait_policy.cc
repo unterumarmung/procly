@@ -36,7 +36,7 @@ Result<ExitStatus> wait_with_timeout(WaitOps& ops, Clock& clock,
     }
     auto& status_opt = wait_result.value();
     if (status_opt.has_value()) {
-      return Error{make_error_code(errc::timeout), "timeout"};
+      return Error{.code = make_error_code(errc::timeout), .context = "timeout"};
     }
     clock.sleep_for(kSleepStep);
   }
@@ -47,7 +47,7 @@ Result<ExitStatus> wait_with_timeout(WaitOps& ops, Clock& clock,
   }
 
   (void)ops.wait_blocking();
-  return Error{make_error_code(errc::timeout), "timeout"};
+  return Error{.code = make_error_code(errc::timeout), .context = "timeout"};
 }
 
 }  // namespace procly::internal

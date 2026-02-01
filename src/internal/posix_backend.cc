@@ -21,11 +21,11 @@ namespace procly::internal {
 namespace {
 
 Error make_errno_error(const char* context) {
-  return Error{std::error_code(errno, std::system_category()), context};
+  return Error{.code = std::error_code(errno, std::system_category()), .context = context};
 }
 
 Error make_spawn_error(int error, const char* context) {
-  return Error{std::error_code(error, std::system_category()), context};
+  return Error{.code = std::error_code(error, std::system_category()), .context = context};
 }
 
 constexpr int kExecFailureExitCode = 127;
@@ -220,7 +220,8 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
       return cleanup_and_return(chdir_action.error());
     }
 #else
-    return cleanup_and_return(Error{make_error_code(errc::chdir_failed), "posix_spawn_chdir"});
+    return cleanup_and_return(
+        Error{.code = make_error_code(errc::chdir_failed), .context = "posix_spawn_chdir"});
 #endif
   }
 
@@ -235,7 +236,8 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
       return cleanup_and_return(set_pgroup.error());
     }
 #else
-    return cleanup_and_return(Error{make_error_code(errc::spawn_failed), "posix_spawn_pgroup"});
+    return cleanup_and_return(
+        Error{.code = make_error_code(errc::spawn_failed), .context = "posix_spawn_pgroup"});
 #endif
   }
   if (flags != 0) {
@@ -301,9 +303,9 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
         return {};
       }
       case StdioSpec::Kind::dup_stdout:
-        return Error{make_error_code(errc::invalid_stdio), "stdio"};
+        return Error{.code = make_error_code(errc::invalid_stdio), .context = "stdio"};
     }
-    return Error{make_error_code(errc::invalid_stdio), "stdio"};
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "stdio"};
   };
 
   auto stdin_result = setup_stdio(spec.stdin_spec, STDIN_FILENO, true, parent_stdin);
@@ -356,7 +358,7 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
   if (spec.opts.new_process_group) {
     spawned.pgid = pid;
   } else if (spec.process_group) {
-    spawned.pgid = *spec.process_group;
+    spawned.pgid = spec.process_group;
   }
   spawned.stdin_fd = parent_stdin;
   spawned.stdout_fd = parent_stdout;
@@ -377,7 +379,7 @@ class PosixBackend final : public Backend {
  public:
   Result<Spawned> spawn(const SpawnSpec& spec) override {
     if (spec.argv.empty()) {
-      return Error{make_error_code(errc::empty_argv), "argv"};
+      return Error{.code = make_error_code(errc::empty_argv), .context = "argv"};
     }
 
     if (select_spawn_strategy(spec) == SpawnStrategy::posix_spawn) {
@@ -397,7 +399,13 @@ class PosixBackend final : public Backend {
                              std::optional<int>& parent_fd) -> Result<int> {
       switch (spec.kind) {
         case StdioSpec::Kind::inherit:
-          return read_only ? STDIN_FILENO : (is_stdout ? STDOUT_FILENO : STDERR_FILENO);
+          if (read_only) {
+            return STDIN_FILENO;
+          }
+          if (is_stdout) {
+            return STDOUT_FILENO;
+          }
+          return STDERR_FILENO;
         case StdioSpec::Kind::null: {
           auto fd = open_null(read_only);
           if (!fd) {
@@ -436,7 +444,7 @@ class PosixBackend final : public Backend {
         case StdioSpec::Kind::dup_stdout:
           return STDOUT_FILENO;
       }
-      return Error{make_error_code(errc::invalid_stdio), "stdio"};
+      return Error{.code = make_error_code(errc::invalid_stdio), .context = "stdio"};
     };
 
     auto stdout_fd = open_for_spec(spec.stdout_spec, false, true, parent_stdout);
@@ -586,7 +594,8 @@ class PosixBackend final : public Backend {
         }
         ::close(fd);
       }
-      return Error{std::error_code(child_errno, std::system_category()), "spawn"};
+      return Error{.code = std::error_code(child_errno, std::system_category()),
+                   .context = "spawn"};
     }
 
     Spawned spawned;
@@ -595,7 +604,7 @@ class PosixBackend final : public Backend {
     if (spec.opts.new_process_group) {
       spawned.pgid = pid;
     } else if (spec.process_group) {
-      spawned.pgid = *spec.process_group;
+      spawned.pgid = spec.process_group;
     }
 
     spawned.stdin_fd = parent_stdin;

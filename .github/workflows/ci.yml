@@ -36,7 +36,7 @@ jobs:
           git diff --exit-code
 
       - name: Lint (clang-tidy)
-        run: aspect lint //:procly
+        run: aspect lint //...
 
   test_release:
     name: tests - ${{ matrix.os }}

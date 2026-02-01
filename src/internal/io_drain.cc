@@ -13,7 +13,7 @@ namespace procly::internal {
 namespace {
 
 Error make_errno_error(const char* context) {
-  return Error{std::error_code(errno, std::system_category()), context};
+  return Error{.code = std::error_code(errno, std::system_category()), .context = context};
 }
 
 }  // namespace
@@ -28,9 +28,9 @@ Result<DrainResult> drain_pipes(PipeReader* stdout_pipe, PipeReader* stderr_pipe
     bool done = false;
   };
 
-  std::array<Target, 2> targets = {
-      Target{stdout_pipe, &result.stdout_data, false},
-      Target{stderr_pipe, &result.stderr_data, false},
+  std::array targets = {
+      Target{.pipe = stdout_pipe, .out = &result.stdout_data, .done = false},
+      Target{.pipe = stderr_pipe, .out = &result.stderr_data, .done = false},
   };
 
   int active = 0;

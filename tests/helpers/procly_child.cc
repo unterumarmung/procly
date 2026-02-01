@@ -246,7 +246,7 @@ std::vector<int> list_open_fds() {
       fds.push_back(fd);
     }
   }
-  std::sort(fds.begin(), fds.end());
+  std::ranges::sort(fds);
   return fds;
 #endif
 }
@@ -271,7 +271,7 @@ void write_open_fds_file(const std::string& path) {
 int main(int argc, char* argv[]) {
   Options options;
   if (!parse_args(argc, argv, &options)) {
-    std::cerr << "invalid args" << std::endl;
+    std::cerr << "invalid args" << '\n';
     return 2;
   }
 
@@ -296,7 +296,7 @@ int main(int argc, char* argv[]) {
         };
 
         ::execv(args[0], args.data());
-        std::cerr << "exec failed" << std::endl;
+        std::cerr << "exec failed" << '\n';
         return 1;
       }
       int sleep_ms = options.grandchild_sleep_ms.value_or(kDefaultGrandchildSleepMs);
@@ -311,7 +311,7 @@ int main(int argc, char* argv[]) {
       ::waitpid(pid, &status, 0);
     }
     if (pid < 0) {
-      std::cerr << "fork failed" << std::endl;
+      std::cerr << "fork failed" << '\n';
       return 1;
     }
   }
@@ -324,11 +324,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (options.stdout_bytes > 0) {
-    write_bytes(std::cout, WriteSpec{options.stdout_bytes, 'a'});
+    write_bytes(std::cout, WriteSpec{.count = options.stdout_bytes, .fill = 'a'});
   }
 
   if (options.stderr_bytes > 0) {
-    write_bytes(std::cerr, WriteSpec{options.stderr_bytes, 'b'});
+    write_bytes(std::cerr, WriteSpec{.count = options.stderr_bytes, .fill = 'b'});
   }
 
   if (options.print_env) {

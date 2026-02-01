@@ -79,9 +79,9 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
     # NB: llvm doesn't release for all platforms on every patch release
     llvm_versions = {
-        "": "15.0.6",
-        "darwin-aarch64": "15.0.7",
-        "darwin-x86_64": "15.0.7",
+        "": "20.1.4",
+        "darwin-aarch64": "20.1.4",
+        "darwin-x86_64": "20.1.4",
     },
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
