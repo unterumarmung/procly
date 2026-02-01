@@ -51,10 +51,12 @@ class unique_fd {
 inline Result<void> set_cloexec(int fd) {
   int flags = ::fcntl(fd, F_GETFD);
   if (flags == -1) {
-    return Error{std::error_code(errno, std::system_category()), "fcntl(F_GETFD)"};
+    return Error{.code = std::error_code(errno, std::system_category()),
+                 .context = "fcntl(F_GETFD)"};
   }
   if (::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1) {
-    return Error{std::error_code(errno, std::system_category()), "fcntl(F_SETFD)"};
+    return Error{.code = std::error_code(errno, std::system_category()),
+                 .context = "fcntl(F_SETFD)"};
   }
   return {};
 }
@@ -62,10 +64,12 @@ inline Result<void> set_cloexec(int fd) {
 inline Result<void> set_nonblocking(int fd) {
   int flags = ::fcntl(fd, F_GETFL);
   if (flags == -1) {
-    return Error{std::error_code(errno, std::system_category()), "fcntl(F_GETFL)"};
+    return Error{.code = std::error_code(errno, std::system_category()),
+                 .context = "fcntl(F_GETFL)"};
   }
   if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-    return Error{std::error_code(errno, std::system_category()), "fcntl(F_SETFL)"};
+    return Error{.code = std::error_code(errno, std::system_category()),
+                 .context = "fcntl(F_SETFL)"};
   }
   return {};
 }
@@ -74,13 +78,13 @@ inline Result<std::pair<unique_fd, unique_fd>> create_pipe() {
 #if PROCLY_PLATFORM_LINUX
   std::array<int, 2> fds{};
   if (::pipe2(fds.data(), O_CLOEXEC) == -1) {
-    return Error{std::error_code(errno, std::system_category()), "pipe2"};
+    return Error{.code = std::error_code(errno, std::system_category()), .context = "pipe2"};
   }
   return std::make_pair(unique_fd(fds[0]), unique_fd(fds[1]));
 #else
   std::array<int, 2> fds{};
   if (::pipe(fds.data()) == -1) {
-    return Error{std::error_code(errno, std::system_category()), "pipe"};
+    return Error{.code = std::error_code(errno, std::system_category()), .context = "pipe"};
   }
   auto cloexec0 = set_cloexec(fds[0]);
   if (!cloexec0) {

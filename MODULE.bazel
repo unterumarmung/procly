@@ -79,9 +79,9 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
     # NB: llvm doesn't release for all platforms on every patch release
     llvm_versions = {
-        "": "15.0.6",
-        "darwin-aarch64": "15.0.7",
-        "darwin-x86_64": "15.0.7",
+        "": "20.1.4",
+        "darwin-aarch64": "20.1.4",
+        "darwin-x86_64": "20.1.4",
     },
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
@@ -101,4 +101,11 @@ git_override(
     module_name = "hedron_compile_commands",
     commit = "abb61a688167623088f8768cc9264798df6a9d10",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+)
+
+archive_override(
+    module_name = "aspect_rules_lint",
+    integrity = "sha512-/COfya0ipRgbIL1EttNYm3gli96oYb7NJF2mX/uQ8AkrD4W24K9bu/jHnetb7u48WQHvl3kydbxNidTOVkfr+Q==",
+    strip_prefix = "rules_lint-35ee86973e8b50c5c68565deaee10e96a96d0b19",
+    urls = ["https://github.com/aspect-build/rules_lint/archive/35ee86973e8b50c5c68565deaee10e96a96d0b19.tar.gz"],
 )

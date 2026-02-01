@@ -13,7 +13,7 @@ namespace procly {
 namespace {
 
 Error make_errno_error(const char* context) {
-  return Error{std::error_code(errno, std::system_category()), context};
+  return Error{.code = std::error_code(errno, std::system_category()), .context = context};
 }
 
 }  // namespace
@@ -46,7 +46,7 @@ Result<std::size_t> PipeReader::read_some(std::span<std::byte> buffer) const {
 
 Result<std::size_t> PipeReader::read_some(void* data, std::size_t n) const {
   if (fd_ < 0) {
-    return Error{make_error_code(errc::invalid_stdio), "read"};
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "read"};
   }
   while (true) {
     ssize_t rv = ::read(fd_, data, n);
@@ -62,7 +62,7 @@ Result<std::size_t> PipeReader::read_some(void* data, std::size_t n) const {
 
 Result<std::string> PipeReader::read_all() const {
   if (fd_ < 0) {
-    return Error{make_error_code(errc::invalid_stdio), "read"};
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "read"};
   }
   std::string out;
   constexpr std::size_t kPipeBufferSize = 8192;
@@ -109,7 +109,7 @@ Result<std::size_t> PipeWriter::write_some(std::span<const std::byte> buffer) co
 
 Result<std::size_t> PipeWriter::write_some(const void* data, std::size_t n) const {
   if (fd_ < 0) {
-    return Error{make_error_code(errc::invalid_stdio), "write"};
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "write"};
   }
   while (true) {
     ssize_t rv = ::write(fd_, data, n);
@@ -125,7 +125,7 @@ Result<std::size_t> PipeWriter::write_some(const void* data, std::size_t n) cons
 
 Result<void> PipeWriter::write_all(std::string_view data) const {
   if (fd_ < 0) {
-    return Error{make_error_code(errc::invalid_stdio), "write"};
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "write"};
   }
   std::size_t offset = 0;
   while (offset < data.size()) {
@@ -134,7 +134,7 @@ Result<void> PipeWriter::write_all(std::string_view data) const {
       return write_result.error();
     }
     if (write_result.value() == 0) {
-      return Error{make_error_code(errc::write_failed), "write"};
+      return Error{.code = make_error_code(errc::write_failed), .context = "write"};
     }
     offset += write_result.value();
   }

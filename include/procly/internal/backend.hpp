@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -14,7 +15,7 @@
 namespace procly::internal {
 
 struct StdioSpec {
-  enum class Kind { inherit, null, piped, fd, file, dup_stdout };
+  enum class Kind : std::uint8_t { inherit, null, piped, fd, file, dup_stdout };
 
   Kind kind = Kind::inherit;
   int fd = -1;

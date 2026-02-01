@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <variant>
@@ -13,7 +14,7 @@
 namespace procly {
 
 /// @brief File open modes for stdio redirection.
-enum class OpenMode {
+enum class OpenMode : std::uint8_t {
   /// @brief Read-only.
   read,
   /// @brief Write-only; create and truncate.
@@ -69,17 +70,17 @@ struct Stdio {
   /// @brief Duplicate a file descriptor (POSIX).
   static Stdio fd(int fd) { return Stdio{Fd{fd}}; }
   /// @brief Redirect to a file path.
-  static Stdio file(std::filesystem::path path) { return Stdio{FileSpec{std::move(path)}}; }
+  static Stdio file(std::filesystem::path path) { return Stdio{FileSpec{.path = std::move(path)}}; }
   /// @brief Redirect to a file path with an explicit open mode.
   static Stdio file(std::filesystem::path path, OpenMode mode) {
-    return Stdio{FileSpec{std::move(path), mode}};
+    return Stdio{FileSpec{.path = std::move(path), .mode = mode}};
   }
   /// @brief Redirect to a file path with full specification.
   static Stdio file(FileSpec spec) { return Stdio{std::move(spec)}; }
 #if PROCLY_PLATFORM_POSIX
   /// @brief Redirect to a file path with explicit mode and permissions (POSIX only).
   static Stdio file(std::filesystem::path path, OpenMode mode, FilePerms perms) {
-    return Stdio{FileSpec{std::move(path), mode, perms}};
+    return Stdio{FileSpec{.path = std::move(path), .mode = mode, .perms = perms}};
   }
 #endif
 };

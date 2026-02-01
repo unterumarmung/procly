@@ -70,8 +70,8 @@ class expected {
     }
   }
 
-  expected(expected&& other) noexcept(
-      std::is_nothrow_move_constructible_v<T>&& std::is_nothrow_move_constructible_v<E>)
+  expected(expected&& other) noexcept(std::is_nothrow_move_constructible_v<T> &&
+                                      std::is_nothrow_move_constructible_v<E>)
       : has_value_(other.has_value_) {
     if (has_value_) {
       new (storage_.value_ptr()) T(std::move(*other.storage_.value_ptr()));
@@ -94,8 +94,8 @@ class expected {
     return *this;
   }
 
-  expected& operator=(expected&& other) noexcept(
-      std::is_nothrow_move_constructible_v<T>&& std::is_nothrow_move_constructible_v<E>) {
+  expected& operator=(expected&& other) noexcept(std::is_nothrow_move_constructible_v<T> &&
+                                                 std::is_nothrow_move_constructible_v<E>) {
     if (this == &other) {
       return *this;
     }

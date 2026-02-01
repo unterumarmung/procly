@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <system_error>
 #include <type_traits>
@@ -20,7 +21,7 @@
 namespace procly {
 
 /// @brief Error codes for procly operations.
-enum class errc {
+enum class errc : std::uint8_t {
   /// @brief No error.
   ok = 0,
 

@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -13,7 +14,7 @@ namespace procly::internal {
 
 namespace {
 
-enum class StdioTarget { stdin, stdout, stderr };
+enum class StdioTarget : std::uint8_t { stdin, stdout, stderr };
 
 OpenMode default_open_mode(StdioTarget target) {
   return target == StdioTarget::stdin ? OpenMode::read : OpenMode::write_truncate;
@@ -45,7 +46,7 @@ Result<StdioSpec> resolve_stdio(const std::optional<Stdio>& value, bool piped_de
   } else if (std::holds_alternative<Stdio::Fd>(value->value)) {
     int fd = std::get<Stdio::Fd>(value->value).fd;
     if (fd < 0) {
-      return Error{make_error_code(errc::invalid_stdio), "fd"};
+      return Error{.code = make_error_code(errc::invalid_stdio), .context = "fd"};
     }
     spec.kind = StdioSpec::Kind::fd;
     spec.fd = fd;
@@ -54,11 +55,11 @@ Result<StdioSpec> resolve_stdio(const std::optional<Stdio>& value, bool piped_de
     OpenMode mode = file.mode.value_or(default_open_mode(target));
     if (target == StdioTarget::stdin) {
       if (!mode_is_readable(mode)) {
-        return Error{make_error_code(errc::invalid_stdio), "file_mode"};
+        return Error{.code = make_error_code(errc::invalid_stdio), .context = "file_mode"};
       }
     } else {
       if (!mode_is_writable(mode)) {
-        return Error{make_error_code(errc::invalid_stdio), "file_mode"};
+        return Error{.code = make_error_code(errc::invalid_stdio), .context = "file_mode"};
       }
     }
     spec.kind = StdioSpec::Kind::file;
@@ -76,7 +77,7 @@ Result<StdioSpec> resolve_stdio(const std::optional<Stdio>& value, bool piped_de
 Result<SpawnSpec> lower_command(const Command& cmd, SpawnMode mode,
                                 const StdioOverride* override_stdio) {
   if (CommandAccess::argv(cmd).empty()) {
-    return Error{make_error_code(errc::empty_argv), "argv"};
+    return Error{.code = make_error_code(errc::empty_argv), .context = "argv"};
   }
 
   SpawnSpec spec;
@@ -160,7 +161,7 @@ Result<SpawnSpec> lower_command(const Command& cmd, SpawnMode mode,
 Result<PipelineSpec> lower_pipeline(const Pipeline& pipeline, SpawnMode mode) {
   const auto& stages = PipelineAccess::stages(pipeline);
   if (stages.empty()) {
-    return Error{make_error_code(errc::invalid_pipeline), "pipeline"};
+    return Error{.code = make_error_code(errc::invalid_pipeline), .context = "pipeline"};
   }
 
   PipelineSpec spec;

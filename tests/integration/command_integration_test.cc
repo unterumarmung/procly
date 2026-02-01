@@ -301,7 +301,7 @@ TEST(CommandIntegrationTest, StdoutFilePermissions) {
   auto status = cmd.status();
   ASSERT_TRUE(status.has_value()) << status.error().context << " " << status.error().code.message();
 
-  struct stat st {};
+  struct stat st{};
   std::string out_path_str = out_path.string();
   ASSERT_EQ(::stat(out_path_str.c_str(), &st), 0);
   EXPECT_EQ(static_cast<int>(st.st_mode & 0777), 0640);

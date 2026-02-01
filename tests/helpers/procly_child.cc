@@ -19,9 +19,12 @@
 
 namespace {
 
+using std::string_literals::operator""s;
+
 constexpr int kParseBase = 10;
 constexpr std::size_t kIoBufferSize = 4096;
 constexpr int kDefaultGrandchildSleepMs = 1000;
+constexpr long kFallbackMaxFd = 256;
 
 struct Options {
   std::size_t stdout_bytes = 0;
@@ -235,7 +238,7 @@ std::vector<int> list_open_fds() {
   std::vector<int> fds;
   long max_fd = ::sysconf(_SC_OPEN_MAX);
   if (max_fd < 0) {
-    max_fd = 256;
+    max_fd = kFallbackMaxFd;
   }
   for (int fd = 0; fd < max_fd; ++fd) {
     errno = 0;
@@ -243,7 +246,7 @@ std::vector<int> list_open_fds() {
       fds.push_back(fd);
     }
   }
-  std::sort(fds.begin(), fds.end());
+  std::ranges::sort(fds);
   return fds;
 #endif
 }
@@ -268,7 +271,7 @@ void write_open_fds_file(const std::string& path) {
 int main(int argc, char* argv[]) {
   Options options;
   if (!parse_args(argc, argv, &options)) {
-    std::cerr << "invalid args" << std::endl;
+    std::cerr << "invalid args" << '\n';
     return 2;
   }
 
@@ -280,13 +283,20 @@ int main(int argc, char* argv[]) {
     pid_t pid = ::fork();
     if (pid == 0) {
       if (options.grandchild_write_open_fds) {
-        std::vector<char*> args;
-        args.push_back(argv[0]);
-        args.push_back(const_cast<char*>("--write-open-fds"));
-        args.push_back(const_cast<char*>(options.grandchild_write_open_fds->c_str()));
-        args.push_back(nullptr);
-        ::execv(argv[0], args.data());
-        std::cerr << "exec failed" << std::endl;
+        std::array<std::string, 3> args_storage = {
+            std::string{argv[0]},
+            "--write-open-fds"s,
+            *options.grandchild_write_open_fds,
+        };
+        std::array<char*, 4> args = {
+            args_storage[0].data(),
+            args_storage[1].data(),
+            args_storage[2].data(),
+            nullptr,
+        };
+
+        ::execv(args[0], args.data());
+        std::cerr << "exec failed" << '\n';
         return 1;
       }
       int sleep_ms = options.grandchild_sleep_ms.value_or(kDefaultGrandchildSleepMs);
@@ -301,7 +311,7 @@ int main(int argc, char* argv[]) {
       ::waitpid(pid, &status, 0);
     }
     if (pid < 0) {
-      std::cerr << "fork failed" << std::endl;
+      std::cerr << "fork failed" << '\n';
       return 1;
     }
   }
@@ -314,11 +324,11 @@ int main(int argc, char* argv[]) {
   }
 
   if (options.stdout_bytes > 0) {
-    write_bytes(std::cout, WriteSpec{options.stdout_bytes, 'a'});
+    write_bytes(std::cout, WriteSpec{.count = options.stdout_bytes, .fill = 'a'});
   }
 
   if (options.stderr_bytes > 0) {
-    write_bytes(std::cerr, WriteSpec{options.stderr_bytes, 'b'});
+    write_bytes(std::cerr, WriteSpec{.count = options.stderr_bytes, .fill = 'b'});
   }
 
   if (options.print_env) {

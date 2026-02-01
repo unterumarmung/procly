@@ -75,7 +75,7 @@ std::optional<PipeReader> Child::take_stderr() noexcept {
 
 Result<ExitStatus> Child::wait() {
   if (!impl_) {
-    return Error{make_error_code(errc::wait_failed), "wait"};
+    return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
   return internal::default_backend().wait(impl_->spawned_, std::nullopt,
                                           std::chrono::milliseconds(0));
@@ -83,35 +83,35 @@ Result<ExitStatus> Child::wait() {
 
 Result<std::optional<ExitStatus>> Child::try_wait() {
   if (!impl_) {
-    return Error{make_error_code(errc::wait_failed), "try_wait"};
+    return Error{.code = make_error_code(errc::wait_failed), .context = "try_wait"};
   }
   return internal::default_backend().try_wait(impl_->spawned_);
 }
 
 Result<ExitStatus> Child::wait(WaitOptions options) {
   if (!impl_) {
-    return Error{make_error_code(errc::wait_failed), "wait"};
+    return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
   return internal::default_backend().wait(impl_->spawned_, options.timeout, options.kill_grace);
 }
 
 Result<void> Child::terminate() {
   if (!impl_) {
-    return Error{make_error_code(errc::kill_failed), "terminate"};
+    return Error{.code = make_error_code(errc::kill_failed), .context = "terminate"};
   }
   return internal::default_backend().terminate(impl_->spawned_);
 }
 
 Result<void> Child::kill() {
   if (!impl_) {
-    return Error{make_error_code(errc::kill_failed), "kill"};
+    return Error{.code = make_error_code(errc::kill_failed), .context = "kill"};
   }
   return internal::default_backend().kill(impl_->spawned_);
 }
 
 Result<void> Child::signal(int signo) {
   if (!impl_) {
-    return Error{make_error_code(errc::kill_failed), "signal"};
+    return Error{.code = make_error_code(errc::kill_failed), .context = "signal"};
   }
   return internal::default_backend().signal(impl_->spawned_, signo);
 }

@@ -216,14 +216,33 @@ bazel build --config=cxx17 //:procly
 bazel test //...
 ```
 
-### Format / lint
+### Format
+
+`bazel run //tools:bazel_env` creates the bazel-env tool bin dir used by `format` and relies on direnv by default.
+Install direnv first (see `https://direnv.net`).
 
 ```sh
-bazel run //tools/format:format
+bazel run //tools:bazel_env
 ```
 
 ```sh
-bazel build //... --config lint
+direnv allow
+```
+
+```sh
+format
+```
+
+### Lint
+
+`aspect lint` is the Aspect CLI lint runner (not the Bazel CLI).
+
+```sh
+aspect lint //:procly
+```
+
+```sh
+aspect lint //:procly --fix
 ```
 
 ### Docs
@@ -250,7 +269,8 @@ See `docs/README.md` for more details.
 
 ## Contributing
 
-- Format: `bazel run //tools/format:format`
+- Format: `format`
+- Lint: `aspect lint` (or `aspect lint --fix`)
 - Tests: `bazel test //tests/unit:all //tests/integration:all`
 - Docs: public API changes should include Doxygen comments
 
