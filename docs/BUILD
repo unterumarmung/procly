@@ -24,6 +24,7 @@ doxygen(
         "GENERATE_TREEVIEW = YES",
         "FULL_SIDEBAR = NO",
         "EXCLUDE_PATTERNS = */include/procly/internal/* */src/*",
+        "MARKDOWN_ID_STYLE = GITHUB",
         "WARN_AS_ERROR = YES",
         "QUIET = YES",
     ],
