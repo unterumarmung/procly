@@ -15,5 +15,5 @@ Checks: >-
   -readability-function-cognitive-complexity,
   -readability-implicit-bool-conversion,
   -cppcoreguidelines-pro-bounds-constant-array-index
-WarningsAsErrors: ''
+WarningsAsErrors: true
 HeaderFilterRegex: '.*'

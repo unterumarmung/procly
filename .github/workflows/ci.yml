@@ -26,13 +26,18 @@ jobs:
           disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
           cache-save: ${{ github.event_name != 'pull_request' }}
 
+      - name: Prepare bazel-env
+        run: |
+          bazel run //tools:bazel_env
+          echo "$PWD/bazel-out/bazel_env-opt/bin/tools/bazel_env/bin" >> "$GITHUB_PATH"
+
       - name: Format (must be clean)
         run: |
-          bazel run //tools/format:format
+          format
           git diff --exit-code
 
       - name: Lint (clang-tidy)
-        run: bazel build //... --config lint
+        run: aspect lint //...
 
   test_release:
     name: tests - ${{ matrix.os }}

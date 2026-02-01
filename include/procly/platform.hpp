@@ -1,4 +1,5 @@
 #pragma once
+// NOLINTBEGIN(modernize-macro-to-enum)
 
 /// @file platform.hpp
 /// @brief Platform and standard feature detection macros.
@@ -34,11 +35,9 @@
 
 #if !PROCLY_PLATFORM_WINDOWS && \
     (defined(__unix__) || PROCLY_PLATFORM_MACOS || PROCLY_PLATFORM_LINUX)
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when building for a POSIX-like platform.
 #define PROCLY_PLATFORM_POSIX 1
 #else
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when building for a POSIX-like platform.
 #define PROCLY_PLATFORM_POSIX 0
 #endif
@@ -57,21 +56,18 @@
 #endif
 
 #if PROCLY_CPLUSPLUS >= 202002L
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when compiling with C++20 or later.
 #define PROCLY_HAS_CXX20 1
 #else
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when compiling with C++20 or later.
 #define PROCLY_HAS_CXX20 0
 #endif
 
 #if defined(__cpp_lib_span) && (__cpp_lib_span >= 202002L)
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when std::span is available.
 #define PROCLY_HAS_STD_SPAN 1
 #else
-// NOLINTNEXTLINE(modernize-macro-to-enum)
 /// @brief True when std::span is available.
 #define PROCLY_HAS_STD_SPAN 0
 #endif
+// NOLINTEND(modernize-macro-to-enum)

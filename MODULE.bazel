@@ -102,3 +102,10 @@ git_override(
     commit = "abb61a688167623088f8768cc9264798df6a9d10",
     remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
 )
+
+archive_override(
+    module_name = "aspect_rules_lint",
+    integrity = "sha512-/COfya0ipRgbIL1EttNYm3gli96oYb7NJF2mX/uQ8AkrD4W24K9bu/jHnetb7u48WQHvl3kydbxNidTOVkfr+Q==",
+    strip_prefix = "rules_lint-35ee86973e8b50c5c68565deaee10e96a96d0b19",
+    urls = ["https://github.com/aspect-build/rules_lint/archive/35ee86973e8b50c5c68565deaee10e96a96d0b19.tar.gz"],
+)
