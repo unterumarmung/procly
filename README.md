@@ -238,11 +238,11 @@ format
 `aspect lint` is the Aspect CLI lint runner (not the Bazel CLI).
 
 ```sh
-aspect lint
+aspect lint //:procly
 ```
 
 ```sh
-aspect lint --fix
+aspect lint //:procly --fix
 ```
 
 ### Docs
