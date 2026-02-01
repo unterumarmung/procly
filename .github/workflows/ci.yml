@@ -61,7 +61,7 @@ jobs:
 
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ubuntu
-    needs: [ lint ]
+    needs: [ test_release ]
     strategy:
       fail-fast: false
       matrix:
