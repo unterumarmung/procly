@@ -60,13 +60,14 @@ jobs:
             --test_output=errors --verbose_failures
 
   sanitizers:
-    name: tests (${{ matrix.cfg }}) - ubuntu
+    name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
     needs: [ test_release ]
     strategy:
       fail-fast: false
       matrix:
+        os: [ ubuntu-latest, macos-latest ]
         cfg: [ asan, ubsan, tsan ]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: bazel-contrib/setup-bazel@0.18.0

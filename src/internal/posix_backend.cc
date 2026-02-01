@@ -1,13 +1,16 @@
+#include <dirent.h>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_set>
 
 #include "procly/internal/backend.hpp"
 #include "procly/internal/fd.hpp"
@@ -28,8 +31,77 @@ Error make_spawn_error(int error, const char* context) {
   return Error{.code = std::error_code(error, std::system_category()), .context = context};
 }
 
+constexpr long kFallbackMaxFd = 256;
 constexpr int kExecFailureExitCode = 127;
 constexpr int kDefaultFileMode = 0666;
+
+std::vector<int> list_open_fds() {
+  std::vector<int> fds;
+#if PROCLY_PLATFORM_LINUX
+  if (DIR* dir = ::opendir("/proc/self/fd")) {
+    int dir_fd = ::dirfd(dir);
+    while (dirent* entry = ::readdir(dir)) {
+      if (!entry->d_name || entry->d_name[0] == '.') {
+        continue;
+      }
+      char* end = nullptr;
+      long value = std::strtol(entry->d_name, &end, 10);
+      if (!end || *end != '\0') {
+        continue;
+      }
+      int fd = static_cast<int>(value);
+      if (fd == dir_fd) {
+        continue;
+      }
+      fds.push_back(fd);
+    }
+    ::closedir(dir);
+    std::sort(fds.begin(), fds.end());
+    return fds;
+  }
+#endif
+  long max_fd = ::sysconf(_SC_OPEN_MAX);
+  if (max_fd < 0) {
+    max_fd = kFallbackMaxFd;
+  }
+  for (int fd = 0; fd < max_fd; ++fd) {
+    errno = 0;
+    if (::fcntl(fd, F_GETFD) != -1 || errno != EBADF) {
+      fds.push_back(fd);
+    }
+  }
+  std::ranges::sort(fds);
+  return fds;
+}
+
+Result<void> add_close_actions_for_inherited_fds(posix_spawn_file_actions_t* actions,
+                                                 std::unordered_set<int>* closed_fds) {
+  auto fds = list_open_fds();
+  for (int fd : fds) {
+    if (fd <= STDERR_FILENO) {
+      continue;
+    }
+    if (closed_fds->contains(fd)) {
+      continue;
+    }
+    int rc = posix_spawn_file_actions_addclose(actions, fd);
+    if (rc != 0) {
+      return make_spawn_error(rc, "posix_spawn_file_actions_addclose");
+    }
+    closed_fds->insert(fd);
+  }
+  return {};
+}
+
+void close_open_fds_except(int keep_fd) {
+  auto fds = list_open_fds();
+  for (int fd : fds) {
+    if (fd == keep_fd || fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+      continue;
+    }
+    ::close(fd);
+  }
+}
 
 Result<int> open_null(bool read_only) {
   int flags = read_only ? O_RDONLY : O_WRONLY;
@@ -173,6 +245,7 @@ Result<void> add_spawn_action(int rc, const char* context) {
 
 Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
   SpawnActionState state;
+  std::unordered_set<int> closed_fds;
   auto init_actions = add_spawn_action(posix_spawn_file_actions_init(&state.actions),
                                        "posix_spawn_file_actions_init");
   if (!init_actions) {
@@ -198,8 +271,18 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
   };
 
   auto add_close = [&](int fd) -> Result<void> {
-    return add_spawn_action(posix_spawn_file_actions_addclose(&state.actions, fd),
-                            "posix_spawn_file_actions_addclose");
+    if (fd < 0) {
+      return {};
+    }
+    if (closed_fds.contains(fd)) {
+      return {};
+    }
+    auto rc = posix_spawn_file_actions_addclose(&state.actions, fd);
+    if (rc != 0) {
+      return make_spawn_error(rc, "posix_spawn_file_actions_addclose");
+    }
+    closed_fds.insert(fd);
+    return {};
   };
   auto add_dup = [&](int src_fd, int dst_fd) -> Result<void> {
     return add_spawn_action(posix_spawn_file_actions_adddup2(&state.actions, src_fd, dst_fd),
@@ -240,6 +323,9 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
         Error{.code = make_error_code(errc::spawn_failed), .context = "posix_spawn_pgroup"});
 #endif
   }
+#ifdef POSIX_SPAWN_CLOEXEC_DEFAULT
+  flags = static_cast<short>(flags | POSIX_SPAWN_CLOEXEC_DEFAULT);
+#endif
   if (flags != 0) {
     auto set_flags =
         add_spawn_action(posix_spawnattr_setflags(&state.attr, flags), "posix_spawnattr_setflags");
@@ -328,6 +414,13 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
       return cleanup_and_return(stderr_result.error());
     }
   }
+
+#if !defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+  auto close_result = add_close_actions_for_inherited_fds(&state.actions, &closed_fds);
+  if (!close_result) {
+    return cleanup_and_return(close_result.error());
+  }
+#endif
 
   std::vector<std::string> argv_copy = spec.argv;
   std::vector<char*> argv_c;
@@ -537,13 +630,8 @@ class PosixBackend final : public Backend {
         }
       }
 
-      for (int fd : opened_fds) {
-        if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO ||
-            fd == error_write_fd || fd == error_read_fd) {
-          continue;
-        }
-        ::close(fd);
-      }
+      // Close any inherited file descriptors to avoid leaking them into exec'ed children.
+      close_open_fds_except(error_write_fd);
 
       // Apply requested environment before exec.
       auto env_result = apply_env(spec.envp);

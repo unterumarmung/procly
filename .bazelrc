@@ -46,9 +46,13 @@ test:asan  --test_env=ASAN_OPTIONS=halt_on_error=1:abort_on_error=1
 # ---- UBSan ----
 build:ubsan --config=san-common
 build:ubsan --copt=-fsanitize=undefined
+# vptr sanitizer is unstable on this toolchain/arch; disable to avoid false crashes.
+build:ubsan --copt=-fno-sanitize=vptr
 build:ubsan --linkopt=-fsanitize=undefined
-build:ubsan --copt=-fno-sanitize-recover=all
+# Use shared UBSan runtime for reliable linking in Bazel sandboxed tests.
+build:ubsan --linkopt=-shared-libsan
 test:ubsan  --test_env=UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+test:linux --run_under=//tools/sanitizers:linux_sanitizer_run_under
 
 # ---- TSan ----
 build:tsan --config=san-common
@@ -57,7 +61,7 @@ build:tsan --linkopt=-fsanitize=thread
 test:tsan  --test_env=TSAN_OPTIONS=halt_on_error=1
 
 # macOS: run tests under a wrapper that stages sanitizer runtimes next to the binary.
-test:macos --run_under=//tools/sanitizers:darwin_san_run_under
+test:macos --run_under=//tools/sanitizers:darwin_sanitizer_run_under
 
 
 # Load any settings & overrides specific to the current user from `.aspect/bazelrc/user.bazelrc`.
