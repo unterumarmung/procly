@@ -23,6 +23,7 @@ constexpr bool kHasSpawnChdir =
 }  // namespace
 
 bool can_use_posix_spawn(const SpawnSpec& spec) {
+  // POSIX_SPAWN_CLOEXEC_DEFAULT is optional; when missing we close FDs manually.
   if (spec.cwd && !kHasSpawnChdir) {
     return false;
   }

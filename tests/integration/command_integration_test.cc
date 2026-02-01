@@ -12,6 +12,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "procly/platform.hpp"
@@ -19,6 +20,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 #if PROCLY_PLATFORM_WINDOWS
@@ -162,6 +164,52 @@ std::vector<int> read_fd_list(const std::filesystem::path& path) {
   return fds;
 }
 
+void close_non_stdio_fds() {
+  long max_fd = ::sysconf(_SC_OPEN_MAX);
+  if (max_fd < 0) {
+    max_fd = 256;
+  }
+  for (int fd = 3; fd < max_fd; ++fd) {
+    ::close(fd);
+  }
+}
+
+// Baseline the helper's "normal" fd set on this host (including sanitizer/runtime fds).
+// What: capture the helper's open fds after an exec with only stdio inherited.
+// Where: used by NoFdLeakIntoGrandchild below.
+// When: run per-test to avoid stale assumptions across different sanitizer builds.
+// Why: macOS sanitizer runtimes keep extra fds open even when our spawn code is correct.
+std::vector<int> baseline_helper_fds(const std::string& helper) {
+  std::filesystem::path fd_path = unique_temp_path("baseline_fds");
+  std::error_code remove_ec;
+  std::filesystem::remove(fd_path, remove_ec);
+
+  pid_t pid = ::fork();
+  if (pid == 0) {
+    close_non_stdio_fds();
+    ::execl(helper.c_str(), helper.c_str(), "--write-open-fds", fd_path.c_str(),
+            static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  if (pid < 0) {
+    ADD_FAILURE() << "fork failed";
+    return {};
+  }
+
+  int status = 0;
+  if (::waitpid(pid, &status, 0) == -1) {
+    ADD_FAILURE() << "waitpid failed";
+  }
+
+  auto fds = read_fd_list(fd_path);
+  std::filesystem::remove(fd_path, remove_ec);
+
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    ADD_FAILURE() << "baseline helper failed";
+  }
+  return fds;
+}
+
 std::string read_file(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
   return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -236,6 +284,15 @@ TEST(CommandIntegrationTest, EnvClearAndSet) {
   Command cmd(helper);
   cmd.arg("--print-env").arg("PROCLY_ENV_TEST");
   cmd.env_clear();
+#if defined(__has_feature)
+#if __has_feature(undefined_behavior_sanitizer)
+  // Keep sanitizer runtime discoverable after env_clear() in UBSan builds.
+  const char* ld_library_path = std::getenv("LD_LIBRARY_PATH");
+  if (ld_library_path && *ld_library_path) {
+    cmd.env("LD_LIBRARY_PATH", ld_library_path);
+  }
+#endif
+#endif
   cmd.env("PROCLY_ENV_TEST", "value");
   auto output = cmd.output();
   ASSERT_TRUE(output.has_value()) << output.error().context << " " << output.error().code.message();
@@ -743,8 +800,11 @@ TEST(CommandIntegrationTest, NoFdLeakIntoGrandchild) {
 
   auto fds = read_fd_list(fd_path);
   ASSERT_FALSE(fds.empty());
+  auto baseline_fds = baseline_helper_fds(helper);
+  ASSERT_FALSE(baseline_fds.empty());
+  std::unordered_set<int> allowed_fds(baseline_fds.begin(), baseline_fds.end());
   for (int fd : fds) {
-    EXPECT_TRUE(fd >= 0 && fd <= 2);
+    EXPECT_TRUE(allowed_fds.find(fd) != allowed_fds.end());
   }
 
   std::filesystem::remove(fd_path, remove_ec);

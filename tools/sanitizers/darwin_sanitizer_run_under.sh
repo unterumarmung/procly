@@ -24,6 +24,9 @@ if [[ "$BIN_ABS" != /* ]]; then
   BIN_ABS="$(pwd)/$BIN"
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/sanitizer_runfiles_resolve.sh"
+
 # Inspect the binary's DT_NEEDED entries and pick only sanitizer dylibs.
 NEEDED="$(
   /usr/bin/otool -L "$BIN" \
@@ -35,90 +38,6 @@ NEEDED="$(
 if [[ -z "$NEEDED" ]]; then
   exec "$BIN" "$@"
 fi
-
-# Resolve a runfile path in a variety of Bazel runtime layouts:
-# - Directory runfiles via RUNFILES_DIR / TEST_SRCDIR.
-# - Manifest runfiles via RUNFILES_MANIFEST_FILE.
-# - Canonical repo names via _repo_mapping (bzlmod).
-# - Workspace-prefixed entries (TEST_WORKSPACE).
-resolve_runfile() {
-  local path="$1"
-  local runfiles_dir="${RUNFILES_DIR:-}"
-  local test_srcdir="${TEST_SRCDIR:-}"
-  local manifest="${RUNFILES_MANIFEST_FILE:-}"
-  local workspace="${TEST_WORKSPACE:-}"
-  # Fall back to <binary>.runfiles when Bazel doesn't set env vars.
-  if [[ -z "$runfiles_dir" && -d "${BIN_ABS}.runfiles" ]]; then
-    runfiles_dir="${BIN_ABS}.runfiles"
-  fi
-  if [[ -z "$test_srcdir" && -d "${BIN_ABS}.runfiles" ]]; then
-    test_srcdir="${BIN_ABS}.runfiles"
-  fi
-  if [[ -z "$manifest" && -f "${BIN_ABS}.runfiles_manifest" ]]; then
-    manifest="${BIN_ABS}.runfiles_manifest"
-  fi
-  # Direct runfiles lookup.
-  if [[ -n "$runfiles_dir" && -e "${runfiles_dir}/${path}" ]]; then
-    echo "${runfiles_dir}/${path}"
-    return 0
-  fi
-  # Some runfiles trees include the workspace name as a prefix.
-  if [[ -n "$runfiles_dir" && -n "$workspace" && -e "${runfiles_dir}/${workspace}/${path}" ]]; then
-    echo "${runfiles_dir}/${workspace}/${path}"
-    return 0
-  fi
-  # When bzlmod is used, map apparent repo names to canonical ones.
-  if [[ -n "$runfiles_dir" && -f "${runfiles_dir}/_repo_mapping" ]]; then
-    local repo="${path%%/*}"
-    local rest="${path#*/}"
-    if [[ "$repo" != "$path" ]]; then
-      local mapped=""
-      mapped="$(awk -F',' -v r="$repo" '$2 == r {print $3; exit 0}' "${runfiles_dir}/_repo_mapping")"
-      if [[ -n "$mapped" && -e "${runfiles_dir}/${mapped}/${rest}" ]]; then
-        echo "${runfiles_dir}/${mapped}/${rest}"
-        return 0
-      fi
-    fi
-  fi
-  # TEST_SRCDIR is often the same as RUNFILES_DIR but not always.
-  if [[ -n "$test_srcdir" && -e "${test_srcdir}/${path}" ]]; then
-    echo "${test_srcdir}/${path}"
-    return 0
-  fi
-  if [[ -n "$test_srcdir" && -n "$workspace" && -e "${test_srcdir}/${workspace}/${path}" ]]; then
-    echo "${test_srcdir}/${workspace}/${path}"
-    return 0
-  fi
-  # Manifest fallback for runfiles, including workspace-prefixed entries.
-  if [[ -n "$manifest" && -f "$manifest" ]]; then
-    local resolved=""
-    resolved="$(awk -v p="$path" '$1 == p {print $2; exit 0}' "${manifest}")"
-    if [[ -n "$resolved" ]]; then
-      echo "$resolved"
-      return 0
-    fi
-    if [[ -n "$workspace" ]]; then
-      resolved="$(awk -v p="$workspace/$path" '$1 == p {print $2; exit 0}' "${manifest}")"
-      if [[ -n "$resolved" ]]; then
-        echo "$resolved"
-        return 0
-      fi
-    fi
-    resolved="$(awk -v p="$path" '$1 ~ (p "$") {print $2; exit 0}' "${manifest}")"
-    if [[ -n "$resolved" ]]; then
-      echo "$resolved"
-      return 0
-    fi
-    if [[ -n "$workspace" ]]; then
-      resolved="$(awk -v p="$workspace/$path" '$1 ~ (p "$") {print $2; exit 0}' "${manifest}")"
-      if [[ -n "$resolved" ]]; then
-        echo "$resolved"
-        return 0
-      fi
-    fi
-  fi
-  return 1
-}
 
 # Locate clang inside the toolchain distribution runfiles.
 CLANG="$(resolve_runfile "llvm_toolchain_llvm/bin/clang" || true)"

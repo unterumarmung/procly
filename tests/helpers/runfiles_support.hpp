@@ -17,21 +17,7 @@ inline std::string helper_path(const char* argv0) {
     return override_path;
   }
 
-  std::string error;
-  auto runfiles = bazel::tools::cpp::runfiles::Runfiles::Create(argv0, &error);
-  if (!runfiles) {
-    std::cerr << "runfiles init failed: " << error << "\n";
-    return "";
-  }
-
-  std::string path = runfiles->Rlocation("procly/tests/helpers/procly_child");
-  if (path.empty()) {
-    path = runfiles->Rlocation("tests/helpers/procly_child");
-  }
-  if (!path.empty() && fs::exists(path)) {
-    return path;
-  }
-
+  // Avoid Runfiles::Create first to reduce allocator noise in ASan.
   const char* srcdir = std::getenv("TEST_SRCDIR");
   const char* workspace = std::getenv("TEST_WORKSPACE");
   if (srcdir && workspace) {
@@ -48,6 +34,21 @@ inline std::string helper_path(const char* argv0) {
         return entry.path().string();
       }
     }
+  }
+
+  std::string error;
+  auto runfiles = bazel::tools::cpp::runfiles::Runfiles::Create(argv0, &error);
+  if (!runfiles) {
+    std::cerr << "runfiles init failed: " << error << "\n";
+    return "";
+  }
+
+  std::string path = runfiles->Rlocation("procly/tests/helpers/procly_child");
+  if (path.empty()) {
+    path = runfiles->Rlocation("tests/helpers/procly_child");
+  }
+  if (!path.empty() && fs::exists(path)) {
+    return path;
   }
 
   std::cerr << "helper path not found\n";

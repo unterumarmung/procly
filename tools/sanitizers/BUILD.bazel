@@ -1,10 +1,20 @@
 package(default_visibility = ["//visibility:public"])
 
 sh_binary(
-    name = "darwin_san_run_under",
-    srcs = ["darwin_san_run_under.sh"],
+    name = "darwin_sanitizer_run_under",
+    srcs = ["darwin_sanitizer_run_under.sh"],
     data = [
+        ":sanitizer_runfiles_resolve.sh",
         "@llvm_toolchain_llvm//:clang",
         "@llvm_toolchain_llvm//:lib",
+    ],
+)
+
+sh_binary(
+    name = "linux_sanitizer_run_under",
+    srcs = ["linux_sanitizer_run_under.sh"],
+    data = [
+        ":sanitizer_runfiles_resolve.sh",
+        "@llvm_toolchain_llvm//:lib_legacy",
     ],
 )
