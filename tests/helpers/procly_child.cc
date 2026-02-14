@@ -17,6 +17,8 @@
 #include <thread>
 #include <vector>
 
+#include "procly/platform.hpp"
+
 namespace {
 
 using std::string_literals::operator""s;
@@ -209,7 +211,7 @@ void write_pid_file(const std::string& path, pid_t pid) {
 }
 
 std::vector<int> list_open_fds() {
-#if defined(__linux__)
+#if PROCLY_PLATFORM_LINUX
   std::vector<int> fds;
   DIR* dir = ::opendir("/proc/self/fd");
   if (!dir) {

@@ -11,4 +11,5 @@ cc_binary(
     name = "procly_child",
     srcs = ["procly_child.cc"],
     visibility = ["//visibility:public"],
+    deps = ["//:procly"],
 )
