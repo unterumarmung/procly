@@ -43,17 +43,25 @@ namespace {
 std::atomic<bool> g_fail_env_after_fork{false};
 std::atomic<bool> g_capture_fork_result{false};
 std::atomic<bool> g_open_extra_fd_before_fork{false};
+std::atomic<bool> g_use_high_injected_fd{false};
+std::atomic<bool> g_force_child_open_max_override{false};
+std::atomic<bool> g_in_postfork_child{false};
 std::atomic<pid_t> g_last_fork_child{-1};
 
 using clearenv_fn = int (*)();
 using setenv_fn = int (*)(const char*, const char*, int);
 using unsetenv_fn = int (*)(const char*);
 using fork_fn = pid_t (*)();
+using sysconf_fn = long (*)(int);
 
 clearenv_fn g_real_clearenv = nullptr;
 setenv_fn g_real_setenv = nullptr;
 unsetenv_fn g_real_unsetenv = nullptr;
 fork_fn g_real_fork = nullptr;
+sysconf_fn g_real_sysconf = nullptr;
+
+constexpr int kInjectedFdLowerBound = 200;
+constexpr long kChildOpenMaxOverride = 3;
 
 void resolve_env_fns() {
   if (!g_real_clearenv) {
@@ -70,6 +78,12 @@ void resolve_env_fns() {
 void resolve_fork_fn() {
   if (!g_real_fork) {
     g_real_fork = reinterpret_cast<fork_fn>(::dlsym(RTLD_NEXT, "fork"));
+  }
+}
+
+void resolve_sysconf_fn() {
+  if (!g_real_sysconf) {
+    g_real_sysconf = reinterpret_cast<sysconf_fn>(::dlsym(RTLD_NEXT, "sysconf"));
   }
 }
 
@@ -120,6 +134,23 @@ extern "C" int unsetenv(const char* name) {
   return -1;
 }
 
+extern "C" long sysconf(int name) {
+  // Keep this override narrow: only force _SC_OPEN_MAX in the post-fork child.
+  if (name == _SC_OPEN_MAX && g_force_child_open_max_override.load(std::memory_order_relaxed) &&
+      g_in_postfork_child.load(std::memory_order_relaxed)) {
+    return kChildOpenMaxOverride;
+  }
+
+  if (!g_real_sysconf) {
+    resolve_sysconf_fn();
+  }
+  if (g_real_sysconf) {
+    return g_real_sysconf(name);
+  }
+  errno = ENOSYS;
+  return -1;
+}
+
 extern "C" pid_t fork() {
   if (!g_real_fork) {
     resolve_fork_fn();
@@ -132,9 +163,18 @@ extern "C" pid_t fork() {
   int injected_fd = -1;
   if (g_open_extra_fd_before_fork.load(std::memory_order_relaxed)) {
     injected_fd = ::open("/dev/null", O_RDONLY);
+    if (injected_fd >= 0 && g_use_high_injected_fd.load(std::memory_order_relaxed)) {
+      // Pin the injected descriptor into a high range so leak detection is deterministic.
+      int high_fd = ::fcntl(injected_fd, F_DUPFD, kInjectedFdLowerBound);
+      if (high_fd >= 0) {
+        ::close(injected_fd);
+        injected_fd = high_fd;
+      }
+    }
   }
 
   pid_t pid = g_real_fork();
+  g_in_postfork_child.store(pid == 0, std::memory_order_relaxed);
   if (pid > 0 && g_capture_fork_result.load(std::memory_order_relaxed)) {
     g_last_fork_child.store(pid, std::memory_order_relaxed);
   }
@@ -203,15 +243,18 @@ class ScopedEnvFailure {
 
 class ScopedForkCapture {
  public:
-  explicit ScopedForkCapture(bool inject_fd)
+  explicit ScopedForkCapture(bool inject_fd, bool use_high_injected_fd = false)
       : previous_capture_(g_capture_fork_result.exchange(true, std::memory_order_relaxed)),
         previous_inject_(
-            g_open_extra_fd_before_fork.exchange(inject_fd, std::memory_order_relaxed)) {
+            g_open_extra_fd_before_fork.exchange(inject_fd, std::memory_order_relaxed)),
+        previous_use_high_(
+            g_use_high_injected_fd.exchange(use_high_injected_fd, std::memory_order_relaxed)) {
     resolve_fork_fn();
     g_last_fork_child.store(-1, std::memory_order_relaxed);
   }
 
   ~ScopedForkCapture() {
+    g_use_high_injected_fd.store(previous_use_high_, std::memory_order_relaxed);
     g_open_extra_fd_before_fork.store(previous_inject_, std::memory_order_relaxed);
     g_capture_fork_result.store(previous_capture_, std::memory_order_relaxed);
   }
@@ -221,6 +264,22 @@ class ScopedForkCapture {
  private:
   bool previous_capture_;
   bool previous_inject_;
+  bool previous_use_high_;
+};
+
+class ScopedChildOpenMaxOverride {
+ public:
+  ScopedChildOpenMaxOverride()
+      : previous_(g_force_child_open_max_override.exchange(true, std::memory_order_relaxed)) {
+    resolve_sysconf_fn();
+  }
+
+  ~ScopedChildOpenMaxOverride() {
+    g_force_child_open_max_override.store(previous_, std::memory_order_relaxed);
+  }
+
+ private:
+  bool previous_;
 };
 #endif
 
@@ -579,6 +638,43 @@ TEST(CommandIntegrationTest, ForkPathClosesFdsOpenedBetweenPreparationAndFork) {
 
   {
     ScopedForkCapture fork_capture(/*inject_fd=*/true);
+    Command cmd(helper);
+    cmd.arg("--write-open-fds").arg(fd_path.string());
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    auto status = cmd.status();
+    ASSERT_TRUE(status.has_value())
+        << status.error().context << " " << status.error().code.message();
+  }
+
+  auto fds = read_fd_list(fd_path);
+  ASSERT_FALSE(fds.empty());
+  for (int fd : fds) {
+    EXPECT_TRUE(allowed_fds.find(fd) != allowed_fds.end());
+  }
+  std::filesystem::remove(fd_path, remove_ec);
+}
+
+TEST(CommandIntegrationTest, ForkPathFdCleanupDoesNotDependOnChildSysconf) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  auto baseline_fds = baseline_helper_fds(helper);
+  ASSERT_FALSE(baseline_fds.empty());
+  std::unordered_set<int> allowed_fds(baseline_fds.begin(), baseline_fds.end());
+
+  std::filesystem::path fd_path = unique_temp_path("fork_fd_race_sysconf");
+  std::error_code remove_ec;
+  std::filesystem::remove(fd_path, remove_ec);
+
+  {
+    // Force an injected high descriptor and a tiny _SC_OPEN_MAX in the post-fork child.
+    // If procly computes the close bound in child via sysconf, injected descriptors leak.
+    ScopedForkCapture fork_capture(/*inject_fd=*/true, /*use_high_injected_fd=*/true);
+    ScopedChildOpenMaxOverride open_max_override;
+
     Command cmd(helper);
     cmd.arg("--write-open-fds").arg(fd_path.string());
     cmd.stdin(Stdio::null());

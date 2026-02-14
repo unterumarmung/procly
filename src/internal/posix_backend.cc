@@ -159,12 +159,19 @@ long max_open_fd_limit() {
   return max_fd;
 }
 
+struct CloseInheritedFdsConfig {
+  int keep_fd = -1;
+  long max_fd = kFallbackMaxFd;
+};
+
 // Close all inherited descriptors after dup2 so descriptors opened by other threads between
 // pre-fork bookkeeping and fork() do not leak into the exec'ed process.
-void close_inherited_fds_after_fork(int keep_fd) {
-  long max_fd = max_open_fd_limit();
-  for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
-    if (fd == keep_fd) {
+void close_inherited_fds_after_fork(CloseInheritedFdsConfig config) {
+  if (config.max_fd < 0) {
+    config.max_fd = kFallbackMaxFd;
+  }
+  for (int fd = STDERR_FILENO + 1; fd < config.max_fd; ++fd) {
+    if (fd == config.keep_fd) {
       continue;
     }
     ::close(fd);
@@ -629,6 +636,8 @@ class PosixBackend final : public Backend {
     envp_c.push_back(nullptr);
 
     std::string exec_path = resolve_exec_path(argv_copy.front(), envp_copy, spec.cwd);
+    // Compute fd upper-bound before fork: the child must avoid non-async-signal-safe syscalls.
+    long inherited_fd_limit = max_open_fd_limit();
 
     pid_t pid = ::fork();
     if (pid == -1) {
@@ -687,7 +696,8 @@ class PosixBackend final : public Backend {
         }
       }
 
-      close_inherited_fds_after_fork(error_write_fd);
+      close_inherited_fds_after_fork(
+          CloseInheritedFdsConfig{.keep_fd = error_write_fd, .max_fd = inherited_fd_limit});
 
       ::execve(exec_path.c_str(), argv_c.data(), envp_c.data());
 
