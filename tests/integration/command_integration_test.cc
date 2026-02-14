@@ -23,14 +23,127 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+#if PROCLY_PLATFORM_POSIX && defined(PROCLY_FORCE_FORK)
+#include <dlfcn.h>
+#endif
 #if PROCLY_PLATFORM_WINDOWS
 #include <process.h>
 #endif
 
 #include "procly/child.hpp"
 #include "procly/command.hpp"
+#include "procly/internal/lowering.hpp"
+#include "procly/internal/posix_spawn.hpp"
 #include "procly/pipeline.hpp"
 #include "tests/helpers/runfiles_support.hpp"
+
+#if PROCLY_PLATFORM_POSIX && defined(PROCLY_FORCE_FORK)
+namespace {
+
+std::atomic<bool> g_fail_env_after_fork{false};
+std::atomic<bool> g_capture_fork_result{false};
+std::atomic<bool> g_open_extra_fd_before_fork{false};
+std::atomic<pid_t> g_last_fork_child{-1};
+
+using clearenv_fn = int (*)();
+using setenv_fn = int (*)(const char*, const char*, int);
+using unsetenv_fn = int (*)(const char*);
+using fork_fn = pid_t (*)();
+
+clearenv_fn g_real_clearenv = nullptr;
+setenv_fn g_real_setenv = nullptr;
+unsetenv_fn g_real_unsetenv = nullptr;
+fork_fn g_real_fork = nullptr;
+
+void resolve_env_fns() {
+  if (!g_real_clearenv) {
+    g_real_clearenv = reinterpret_cast<clearenv_fn>(::dlsym(RTLD_NEXT, "clearenv"));
+  }
+  if (!g_real_setenv) {
+    g_real_setenv = reinterpret_cast<setenv_fn>(::dlsym(RTLD_NEXT, "setenv"));
+  }
+  if (!g_real_unsetenv) {
+    g_real_unsetenv = reinterpret_cast<unsetenv_fn>(::dlsym(RTLD_NEXT, "unsetenv"));
+  }
+}
+
+void resolve_fork_fn() {
+  if (!g_real_fork) {
+    g_real_fork = reinterpret_cast<fork_fn>(::dlsym(RTLD_NEXT, "fork"));
+  }
+}
+
+}  // namespace
+
+extern "C" int clearenv() {
+  if (g_fail_env_after_fork.load(std::memory_order_relaxed)) {
+    errno = EPERM;
+    return -1;
+  }
+  if (!g_real_clearenv) {
+    resolve_env_fns();
+  }
+  if (g_real_clearenv) {
+    return g_real_clearenv();
+  }
+  errno = ENOSYS;
+  return -1;
+}
+
+extern "C" int setenv(const char* name, const char* value, int overwrite) {
+  if (g_fail_env_after_fork.load(std::memory_order_relaxed)) {
+    errno = EPERM;
+    return -1;
+  }
+  if (!g_real_setenv) {
+    resolve_env_fns();
+  }
+  if (g_real_setenv) {
+    return g_real_setenv(name, value, overwrite);
+  }
+  errno = ENOSYS;
+  return -1;
+}
+
+extern "C" int unsetenv(const char* name) {
+  if (g_fail_env_after_fork.load(std::memory_order_relaxed)) {
+    errno = EPERM;
+    return -1;
+  }
+  if (!g_real_unsetenv) {
+    resolve_env_fns();
+  }
+  if (g_real_unsetenv) {
+    return g_real_unsetenv(name);
+  }
+  errno = ENOSYS;
+  return -1;
+}
+
+extern "C" pid_t fork() {
+  if (!g_real_fork) {
+    resolve_fork_fn();
+  }
+  if (!g_real_fork) {
+    errno = ENOSYS;
+    return -1;
+  }
+
+  int injected_fd = -1;
+  if (g_open_extra_fd_before_fork.load(std::memory_order_relaxed)) {
+    injected_fd = ::open("/dev/null", O_RDONLY);
+  }
+
+  pid_t pid = g_real_fork();
+  if (pid > 0 && g_capture_fork_result.load(std::memory_order_relaxed)) {
+    g_last_fork_child.store(pid, std::memory_order_relaxed);
+  }
+  if (pid != 0 && injected_fd >= 0) {
+    ::close(injected_fd);
+  }
+  return pid;
+}
+#endif
 
 namespace procly {
 
@@ -77,6 +190,39 @@ std::string helper_path() {
   }
   return path;
 }
+
+#if PROCLY_PLATFORM_POSIX && defined(PROCLY_FORCE_FORK)
+class ScopedEnvFailure {
+ public:
+  ScopedEnvFailure() {
+    resolve_env_fns();
+    g_fail_env_after_fork.store(true, std::memory_order_relaxed);
+  }
+  ~ScopedEnvFailure() { g_fail_env_after_fork.store(false, std::memory_order_relaxed); }
+};
+
+class ScopedForkCapture {
+ public:
+  explicit ScopedForkCapture(bool inject_fd)
+      : previous_capture_(g_capture_fork_result.exchange(true, std::memory_order_relaxed)),
+        previous_inject_(
+            g_open_extra_fd_before_fork.exchange(inject_fd, std::memory_order_relaxed)) {
+    resolve_fork_fn();
+    g_last_fork_child.store(-1, std::memory_order_relaxed);
+  }
+
+  ~ScopedForkCapture() {
+    g_open_extra_fd_before_fork.store(previous_inject_, std::memory_order_relaxed);
+    g_capture_fork_result.store(previous_capture_, std::memory_order_relaxed);
+  }
+
+  pid_t last_child_pid() const { return g_last_fork_child.load(std::memory_order_relaxed); }
+
+ private:
+  bool previous_capture_;
+  bool previous_inject_;
+};
+#endif
 
 #if PROCLY_PLATFORM_POSIX
 class ScopedUmask {
@@ -411,6 +557,115 @@ TEST(CommandIntegrationTest, WaitTimeout) {
   ASSERT_FALSE(wait_result.has_value());
   EXPECT_EQ(wait_result.error().code, make_error_code(errc::timeout));
 }
+
+#if PROCLY_PLATFORM_POSIX && defined(PROCLY_FORCE_FORK)
+TEST(CommandIntegrationTest, ForkPathClosesFdsOpenedBetweenPreparationAndFork) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  auto baseline_fds = baseline_helper_fds(helper);
+  ASSERT_FALSE(baseline_fds.empty());
+  std::unordered_set<int> allowed_fds(baseline_fds.begin(), baseline_fds.end());
+
+  std::filesystem::path fd_path = unique_temp_path("fork_fd_race");
+  std::error_code remove_ec;
+  std::filesystem::remove(fd_path, remove_ec);
+
+  {
+    ScopedForkCapture fork_capture(/*inject_fd=*/true);
+    Command cmd(helper);
+    cmd.arg("--write-open-fds").arg(fd_path.string());
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    auto status = cmd.status();
+    ASSERT_TRUE(status.has_value())
+        << status.error().context << " " << status.error().code.message();
+  }
+
+  auto fds = read_fd_list(fd_path);
+  ASSERT_FALSE(fds.empty());
+  for (int fd : fds) {
+    EXPECT_TRUE(allowed_fds.find(fd) != allowed_fds.end());
+  }
+  std::filesystem::remove(fd_path, remove_ec);
+}
+
+TEST(CommandIntegrationTest, ForkExecFailureReapsChildBeforeReturningError) {
+  ScopedForkCapture fork_capture(/*inject_fd=*/false);
+
+  Command cmd("/definitely/missing/procly_binary");
+  auto child_result = cmd.spawn();
+  ASSERT_FALSE(child_result.has_value());
+
+  pid_t child_pid = fork_capture.last_child_pid();
+  ASSERT_GT(child_pid, 0);
+
+  int status = 0;
+  errno = 0;
+  pid_t wait_result = ::waitpid(child_pid, &status, WNOHANG);
+  EXPECT_EQ(wait_result, -1);
+  EXPECT_EQ(errno, ECHILD);
+}
+
+TEST(CommandIntegrationTest, ForkPathResolvesRelativeProgramUsingChildCwd) {
+  std::filesystem::path dir_path = unique_temp_path("cwd_path_dir");
+  std::error_code ec;
+  std::filesystem::create_directory(dir_path, ec);
+  ASSERT_FALSE(ec) << ec.message();
+
+  std::filesystem::path bin_dir = dir_path / "bin";
+  std::filesystem::create_directory(bin_dir, ec);
+  ASSERT_FALSE(ec) << ec.message();
+
+  std::filesystem::path script_path = bin_dir / "procly_echo";
+  {
+    std::ofstream script(script_path);
+    ASSERT_TRUE(script.is_open());
+    script << "#!/bin/sh\n";
+    script << "printf \"cwd_exec_ok\"";
+  }
+  ASSERT_EQ(::chmod(script_path.c_str(), 0755), 0);
+
+  Command cmd("procly_echo");
+  cmd.current_dir(dir_path);
+  cmd.env_clear();
+  cmd.env("PATH", "bin");
+  auto out = cmd.output();
+  ASSERT_TRUE(out.has_value()) << out.error().context << " " << out.error().code.message();
+  EXPECT_EQ(out->stdout_data, "cwd_exec_ok");
+
+  std::filesystem::remove(script_path, ec);
+  std::filesystem::remove(bin_dir, ec);
+  std::filesystem::remove(dir_path, ec);
+}
+
+TEST(CommandIntegrationTest, ForkPathAvoidsAllocationsAfterFork) {
+  ScopedEnvFailure env_failure;
+
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  Command cmd(helper);
+  cmd.arg("--stdout-bytes").arg("1");
+  auto spec_result = internal::lower_command(cmd, internal::SpawnMode::spawn, nullptr);
+  ASSERT_TRUE(spec_result.has_value());
+  EXPECT_EQ(internal::select_spawn_strategy(spec_result.value()),
+            internal::SpawnStrategy::fork_exec);
+  auto child_result = cmd.spawn();
+  ASSERT_TRUE(child_result.has_value())
+      << child_result.error().context << " " << child_result.error().code.message();
+
+  WaitOptions opts;
+  opts.timeout = std::chrono::milliseconds(100);
+  opts.kill_grace = std::chrono::milliseconds(50);
+  auto wait_result = child_result->wait(opts);
+  ASSERT_TRUE(wait_result.has_value())
+      << wait_result.error().context << " " << wait_result.error().code.message();
+  EXPECT_TRUE(wait_result->success());
+}
+#endif
 
 TEST(CommandIntegrationTest, TryWaitReturnsEmptyWhileRunning) {
   std::string helper = helper_path();

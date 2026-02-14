@@ -284,6 +284,22 @@ TEST(BackendInjectionTest, PipelineSpawnStopsOnError) {
   EXPECT_EQ(backend.spawn_specs.size(), 2u);
 }
 
+TEST(BackendInjectionTest, PipelineSpawnFailureCleansUpStartedStages) {
+  FakeBackend backend;
+  backend.fail_on_spawn_call = 2;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Pipeline pipeline = Command("echo") | Command("cat") | Command("cat");
+  auto child_result = pipeline.spawn();
+  ASSERT_FALSE(child_result.has_value());
+  EXPECT_EQ(child_result.error().code, make_error_code(errc::spawn_failed));
+
+  ASSERT_EQ(backend.kill_pids.size(), 1u);
+  EXPECT_EQ(backend.kill_pids[0], 101);
+  ASSERT_EQ(backend.wait_calls.size(), 1u);
+  EXPECT_EQ(backend.wait_calls[0].pid, 101);
+}
+
 TEST(BackendInjectionTest, PipelineGroupTerminateAndKillUseLeader) {
   FakeBackend backend;
   internal::ScopedBackendOverride override_backend(backend);

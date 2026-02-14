@@ -58,6 +58,28 @@ struct PipelineChild::Impl {
   std::optional<PipeReader> stderr_pipe;
 };
 
+void cleanup_partially_spawned_pipeline(std::vector<internal::Spawned>* spawned,
+                                        bool new_process_group) {
+  if (spawned == nullptr || spawned->empty()) {
+    return;
+  }
+  auto& backend = internal::default_backend();
+
+  // Kill first so failed pipeline creation cannot leave background processes running.
+  if (new_process_group) {
+    (void)backend.kill(spawned->front());
+  } else {
+    for (auto& stage : *spawned) {
+      (void)backend.kill(stage);
+    }
+  }
+
+  // Reap every stage to avoid zombies after a mid-pipeline spawn failure.
+  for (auto& stage : *spawned) {
+    (void)backend.wait(stage, std::nullopt, std::chrono::milliseconds(0));
+  }
+}
+
 static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::SpawnMode mode) {
   auto pipeline_spec_result = internal::lower_pipeline(pipeline, mode);
   if (!pipeline_spec_result) {
@@ -111,6 +133,7 @@ static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::
 
     auto spawned_result = internal::default_backend().spawn(spec);
     if (!spawned_result) {
+      cleanup_partially_spawned_pipeline(&spawned, pipeline_spec.new_process_group);
       return spawned_result.error();
     }
 
