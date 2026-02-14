@@ -430,14 +430,12 @@ TEST(CommandIntegrationTest, EnvClearAndSet) {
   Command cmd(helper);
   cmd.arg("--print-env").arg("PROCLY_ENV_TEST");
   cmd.env_clear();
-#if defined(__has_feature)
-#if __has_feature(undefined_behavior_sanitizer)
+#if PROCLY_HAS_UNDEFINED_BEHAVIOR_SANITIZER
   // Keep sanitizer runtime discoverable after env_clear() in UBSan builds.
   const char* ld_library_path = std::getenv("LD_LIBRARY_PATH");
   if (ld_library_path && *ld_library_path) {
     cmd.env("LD_LIBRARY_PATH", ld_library_path);
   }
-#endif
 #endif
   cmd.env("PROCLY_ENV_TEST", "value");
   auto output = cmd.output();
@@ -1040,7 +1038,7 @@ TEST(CommandIntegrationTest, FdCountStableAfterRepeatedOutput) {
 }
 
 TEST(CommandIntegrationTest, NoFdLeakIntoGrandchild) {
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#if PROCLY_HAS_THREAD_SANITIZER
   GTEST_SKIP() << "TSan runtime keeps extra file descriptors open in child processes.";
 #endif
   std::string helper = helper_path();

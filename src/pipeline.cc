@@ -178,6 +178,22 @@ Result<ExitStatus> Pipeline::status() const {
   if (!child_result) {
     return child_result.error();
   }
+
+  auto stdin_pipe = child_result->take_stdin();
+  if (stdin_pipe) {
+    stdin_pipe->close();
+  }
+
+  auto stdout_pipe = child_result->take_stdout();
+  auto stderr_pipe = child_result->take_stderr();
+  if (stdout_pipe || stderr_pipe) {
+    auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
+                                         stderr_pipe ? &*stderr_pipe : nullptr);
+    if (!drained) {
+      return drained.error();
+    }
+  }
+
   auto status_result = child_result->wait();
   if (!status_result) {
     return status_result.error();
@@ -189,6 +205,11 @@ Result<Output> Pipeline::output() const {
   auto child_result = spawn_pipeline(*this, internal::SpawnMode::output);
   if (!child_result) {
     return child_result.error();
+  }
+
+  auto stdin_pipe = child_result->take_stdin();
+  if (stdin_pipe) {
+    stdin_pipe->close();
   }
 
   auto stdout_pipe = child_result->take_stdout();

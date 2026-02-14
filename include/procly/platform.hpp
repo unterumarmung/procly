@@ -71,6 +71,23 @@
 #define PROCLY_HAS_STD_SPAN 0
 #endif
 
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+/// @brief True when compiling with AddressSanitizer instrumentation.
+#define PROCLY_HAS_ADDRESS_SANITIZER 1
+#else
+/// @brief True when compiling with AddressSanitizer instrumentation.
+#define PROCLY_HAS_ADDRESS_SANITIZER 0
+#endif
+
+#if defined(__SANITIZE_UNDEFINED__) || \
+    (defined(__has_feature) && __has_feature(undefined_behavior_sanitizer))
+/// @brief True when compiling with UndefinedBehaviorSanitizer instrumentation.
+#define PROCLY_HAS_UNDEFINED_BEHAVIOR_SANITIZER 1
+#else
+/// @brief True when compiling with UndefinedBehaviorSanitizer instrumentation.
+#define PROCLY_HAS_UNDEFINED_BEHAVIOR_SANITIZER 0
+#endif
+
 #if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
 /// @brief True when compiling with ThreadSanitizer instrumentation.
 #define PROCLY_HAS_THREAD_SANITIZER 1
