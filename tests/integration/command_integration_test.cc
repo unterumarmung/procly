@@ -46,6 +46,7 @@ std::atomic<bool> g_open_extra_fd_before_fork{false};
 std::atomic<bool> g_use_high_injected_fd{false};
 std::atomic<bool> g_force_child_open_max_override{false};
 std::atomic<bool> g_in_postfork_child{false};
+std::atomic<int> g_last_injected_fd{-1};
 std::atomic<pid_t> g_last_fork_child{-1};
 
 using clearenv_fn = int (*)();
@@ -172,6 +173,7 @@ extern "C" pid_t fork() {
       }
     }
   }
+  g_last_injected_fd.store(injected_fd, std::memory_order_relaxed);
 
   pid_t pid = g_real_fork();
   g_in_postfork_child.store(pid == 0, std::memory_order_relaxed);
@@ -251,6 +253,7 @@ class ScopedForkCapture {
             g_use_high_injected_fd.exchange(use_high_injected_fd, std::memory_order_relaxed)) {
     resolve_fork_fn();
     g_last_fork_child.store(-1, std::memory_order_relaxed);
+    g_last_injected_fd.store(-1, std::memory_order_relaxed);
   }
 
   ~ScopedForkCapture() {
@@ -260,6 +263,7 @@ class ScopedForkCapture {
   }
 
   pid_t last_child_pid() const { return g_last_fork_child.load(std::memory_order_relaxed); }
+  int last_injected_fd() const { return g_last_injected_fd.load(std::memory_order_relaxed); }
 
  private:
   bool previous_capture_;
@@ -661,17 +665,14 @@ TEST(CommandIntegrationTest, ForkPathFdCleanupDoesNotDependOnChildSysconf) {
   std::string helper = helper_path();
   ASSERT_FALSE(helper.empty());
 
-  auto baseline_fds = baseline_helper_fds(helper);
-  ASSERT_FALSE(baseline_fds.empty());
-  std::unordered_set<int> allowed_fds(baseline_fds.begin(), baseline_fds.end());
-
   std::filesystem::path fd_path = unique_temp_path("fork_fd_race_sysconf");
   std::error_code remove_ec;
   std::filesystem::remove(fd_path, remove_ec);
 
+  int injected_fd = -1;
   {
     // Force an injected high descriptor and a tiny _SC_OPEN_MAX in the post-fork child.
-    // If procly computes the close bound in child via sysconf, injected descriptors leak.
+    // If procly computes the close bound in child via sysconf, the injected descriptor leaks.
     ScopedForkCapture fork_capture(/*inject_fd=*/true, /*use_high_injected_fd=*/true);
     ScopedChildOpenMaxOverride open_max_override;
 
@@ -684,13 +685,22 @@ TEST(CommandIntegrationTest, ForkPathFdCleanupDoesNotDependOnChildSysconf) {
     auto status = cmd.status();
     ASSERT_TRUE(status.has_value())
         << status.error().context << " " << status.error().code.message();
+
+    injected_fd = fork_capture.last_injected_fd();
+    ASSERT_GE(injected_fd, kInjectedFdLowerBound);
   }
 
   auto fds = read_fd_list(fd_path);
   ASSERT_FALSE(fds.empty());
+
+  bool leaked_injected_fd = false;
   for (int fd : fds) {
-    EXPECT_TRUE(allowed_fds.find(fd) != allowed_fds.end());
+    if (fd == injected_fd) {
+      leaked_injected_fd = true;
+      break;
+    }
   }
+  EXPECT_FALSE(leaked_injected_fd) << "injected fd leaked into child: " << injected_fd;
   std::filesystem::remove(fd_path, remove_ec);
 }
 
