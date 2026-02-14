@@ -56,7 +56,8 @@ jobs:
 
       - name: Tests
         run: |
-          bazel test --config=debug //... \
+          bazel test //... \
+            --test_output=streamed \
             --test_summary=short --verbose_failures
 
   sanitizers:
@@ -78,7 +79,8 @@ jobs:
 
       - name: Tests (${{ matrix.cfg }})
         run: |
-          bazel test --config=${{ matrix.cfg }} --config=debug //... \
+          bazel test --config=${{ matrix.cfg }} //... \
+            --test_output=streamed \
             --test_summary=short --verbose_failures
 
   docs_build:
