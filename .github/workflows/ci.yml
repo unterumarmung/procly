@@ -56,8 +56,8 @@ jobs:
 
       - name: Tests
         run: |
-          bazel test //... \
-            --test_output=errors --verbose_failures
+          bazel test --config=debug //... \
+            --test_summary=short --verbose_failures
 
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
@@ -79,14 +79,8 @@ jobs:
 
       - name: Tests (${{ matrix.cfg }})
         run: |
-          extra_flags=()
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" && "${{ matrix.cfg }}" == "tsan" ]]; then
-            # Use the repo's debug config to stream per-test output in failing ubuntu+tsan CI runs.
-            extra_flags+=(--config=debug --test_summary=short)
-          fi
-
-          bazel test --config=${{ matrix.cfg }} "${extra_flags[@]}" //... \
-            --verbose_failures
+          bazel test --config=${{ matrix.cfg }} --config=debug //... \
+            --test_summary=short --verbose_failures
 
   docs_build:
     name: docs (build)
