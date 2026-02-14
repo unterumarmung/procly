@@ -70,4 +70,12 @@
 /// @brief True when std::span is available.
 #define PROCLY_HAS_STD_SPAN 0
 #endif
+
+#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+/// @brief True when compiling with ThreadSanitizer instrumentation.
+#define PROCLY_HAS_THREAD_SANITIZER 1
+#else
+/// @brief True when compiling with ThreadSanitizer instrumentation.
+#define PROCLY_HAS_THREAD_SANITIZER 0
+#endif
 // NOLINTEND(modernize-macro-to-enum)

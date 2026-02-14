@@ -658,8 +658,15 @@ TEST(CommandIntegrationTest, ForkPathAvoidsAllocationsAfterFork) {
       << child_result.error().context << " " << child_result.error().code.message();
 
   WaitOptions opts;
+#if PROCLY_HAS_THREAD_SANITIZER
+  // TSan startup is substantially slower; keep timeout as a liveness guard
+  // while avoiding false timeouts on healthy fork/exec paths.
+  opts.timeout = std::chrono::milliseconds(2000);
+  opts.kill_grace = std::chrono::milliseconds(500);
+#else
   opts.timeout = std::chrono::milliseconds(100);
   opts.kill_grace = std::chrono::milliseconds(50);
+#endif
   auto wait_result = child_result->wait(opts);
   ASSERT_TRUE(wait_result.has_value())
       << wait_result.error().context << " " << wait_result.error().code.message();
