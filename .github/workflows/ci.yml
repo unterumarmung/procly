@@ -103,7 +103,7 @@ jobs:
           set -euo pipefail
           rm -rf _site
           mkdir -p _site
-          rsync -a bazel-bin/docs/html/ _site/
+          rsync -a --no-perms bazel-bin/docs/html/ _site/
           touch _site/.nojekyll
 
       - name: Upload Pages artifact
