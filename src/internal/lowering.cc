@@ -8,11 +8,22 @@
 
 #include "procly/internal/access.hpp"
 
-extern char** environ;
+#if PROCLY_PLATFORM_MACOS
+#include <crt_externs.h>
+#endif
 
 namespace procly::internal {
 
 namespace {
+
+char** process_environ() {
+#if PROCLY_PLATFORM_MACOS
+  char*** envp = _NSGetEnviron();
+  return (envp != nullptr) ? *envp : nullptr;
+#else
+  return ::environ;
+#endif
+}
 
 enum class StdioTarget : std::uint8_t { stdin, stdout, stderr };
 
@@ -87,7 +98,7 @@ Result<SpawnSpec> lower_command(const Command& cmd, SpawnMode mode,
 
   std::map<std::string, std::string, std::less<>> env_map;
   if (CommandAccess::inherit_env(cmd)) {
-    for (char** env = ::environ; env && *env != nullptr; ++env) {
+    for (char** env = process_environ(); env && *env != nullptr; ++env) {
       std::string entry(*env);
       auto pos = entry.find('=');
       if (pos == std::string::npos) {

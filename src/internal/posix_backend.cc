@@ -19,8 +19,6 @@
 #include "procly/internal/posix_spawn.hpp"
 #include "procly/internal/wait_policy.hpp"
 
-extern char** environ;
-
 namespace procly::internal {
 
 namespace {
@@ -36,6 +34,7 @@ Error make_spawn_error(int error, const char* context) {
 constexpr long kFallbackMaxFd = 256;
 constexpr int kExecFailureExitCode = 127;
 constexpr int kDefaultFileMode = 0666;
+constexpr int kParseBase = 10;
 
 std::vector<int> list_open_fds() {
   std::vector<int> fds;
@@ -47,7 +46,7 @@ std::vector<int> list_open_fds() {
         continue;
       }
       char* end = nullptr;
-      long value = std::strtol(entry->d_name, &end, 10);
+      long value = std::strtol(entry->d_name, &end, kParseBase);
       if (!end || *end != '\0') {
         continue;
       }
@@ -58,7 +57,7 @@ std::vector<int> list_open_fds() {
       fds.push_back(fd);
     }
     ::closedir(dir);
-    std::sort(fds.begin(), fds.end());
+    std::ranges::sort(fds);
     return fds;
   }
 #endif

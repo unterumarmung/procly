@@ -232,7 +232,7 @@ std::vector<int> list_open_fds() {
     fds.push_back(fd);
   }
   ::closedir(dir);
-  std::sort(fds.begin(), fds.end());
+  std::ranges::sort(fds);
   return fds;
 #else
   std::vector<int> fds;
