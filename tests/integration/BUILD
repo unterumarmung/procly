@@ -17,9 +17,13 @@ cc_test(
     srcs = ["command_integration_test.cc"],
     copts = ["-DPROCLY_FORCE_FORK"],
     data = ["//tests/helpers:procly_child"],
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
     tags = ["integration"],
     deps = [
-        "//:procly",
+        "//:procly_force_fork",
         "//tests/helpers:runfiles_support",
         "@googletest//:gtest_main",
     ],

@@ -10,6 +10,8 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <string_view>
 #include <unordered_set>
 
 #include "procly/internal/backend.hpp"
@@ -93,13 +95,92 @@ Result<void> add_close_actions_for_inherited_fds(posix_spawn_file_actions_t* act
   return {};
 }
 
-void close_open_fds_except(int keep_fd) {
-  auto fds = list_open_fds();
-  for (int fd : fds) {
-    if (fd == keep_fd || fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+std::optional<std::string> find_env_value(const std::vector<std::string>& envp, const char* key) {
+  std::size_t key_len = std::strlen(key);
+  for (const auto& entry : envp) {
+    if (entry.size() <= key_len) {
+      continue;
+    }
+    if (entry.compare(0, key_len, key) != 0 || entry[key_len] != '=') {
+      continue;
+    }
+    return entry.substr(key_len + 1);
+  }
+  return std::nullopt;
+}
+
+std::filesystem::path resolve_search_dir(std::string_view raw_dir,
+                                         const std::optional<std::filesystem::path>& cwd) {
+  std::filesystem::path dir =
+      raw_dir.empty() ? std::filesystem::path(".") : std::filesystem::path(raw_dir);
+  if (cwd && dir.is_relative()) {
+    return *cwd / dir;
+  }
+  return dir;
+}
+
+// Resolve argv[0] before fork so the child only needs async-signal-safe syscalls.
+std::string resolve_exec_path(const std::string& argv0, const std::vector<std::string>& envp,
+                              const std::optional<std::filesystem::path>& cwd) {
+  if (argv0.find('/') != std::string::npos) {
+    return argv0;
+  }
+  std::string path_value;
+  if (auto env_path = find_env_value(envp, "PATH")) {
+    path_value = std::move(*env_path);
+  } else {
+    path_value = "/usr/bin:/bin";
+  }
+  if (path_value.empty()) {
+    return argv0;
+  }
+  std::size_t start = 0;
+  while (true) {
+    std::size_t end = path_value.find(':', start);
+    std::size_t len = (end == std::string::npos) ? path_value.size() - start : end - start;
+    std::string_view dir =
+        (len == 0) ? std::string_view(".") : std::string_view(path_value).substr(start, len);
+    std::filesystem::path candidate = resolve_search_dir(dir, cwd) / argv0;
+    if (::access(candidate.c_str(), X_OK) == 0) {
+      return candidate.string();
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  return argv0;
+}
+
+long max_open_fd_limit() {
+  long max_fd = ::sysconf(_SC_OPEN_MAX);
+  if (max_fd < 0) {
+    return kFallbackMaxFd;
+  }
+  return max_fd;
+}
+
+// Close all inherited descriptors after dup2 so descriptors opened by other threads between
+// pre-fork bookkeeping and fork() do not leak into the exec'ed process.
+void close_inherited_fds_after_fork(int keep_fd) {
+  long max_fd = max_open_fd_limit();
+  for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
+    if (fd == keep_fd) {
       continue;
     }
     ::close(fd);
+  }
+}
+
+void reap_child_after_exec_failure(pid_t pid) {
+  if (pid <= 0) {
+    return;
+  }
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) {
+      break;
+    }
   }
 }
 
@@ -175,47 +256,6 @@ Result<void> send_signal(const Spawned& spawned, int signo) {
   }
   if (::kill(target, signo) == -1) {
     return make_errno_error("kill");
-  }
-  return {};
-}
-
-Result<void> clear_environment() {
-#if PROCLY_PLATFORM_MACOS
-  while (::environ && *::environ) {
-    std::string entry(*::environ);
-    auto pos = entry.find('=');
-    if (pos == std::string::npos) {
-      break;
-    }
-    std::string key = entry.substr(0, pos);
-    if (::unsetenv(key.c_str()) != 0) {
-      return make_errno_error("unsetenv");
-    }
-  }
-  return {};
-#else
-  if (::clearenv() != 0) {
-    return make_errno_error("clearenv");
-  }
-  return {};
-#endif
-}
-
-Result<void> apply_env(const std::vector<std::string>& envp) {
-  auto cleared = clear_environment();
-  if (!cleared) {
-    return cleared.error();
-  }
-  for (const auto& entry : envp) {
-    auto pos = entry.find('=');
-    if (pos == std::string::npos) {
-      continue;
-    }
-    std::string key = entry.substr(0, pos);
-    std::string value = entry.substr(pos + 1);
-    if (::setenv(key.c_str(), value.c_str(), 1) != 0) {
-      return make_errno_error("setenv");
-    }
   }
   return {};
 }
@@ -573,6 +613,24 @@ class PosixBackend final : public Backend {
     opened_fds.push_back(error_read_fd);
     opened_fds.push_back(error_write_fd);
 
+    std::vector<std::string> argv_copy = spec.argv;
+    std::vector<char*> argv_c;
+    argv_c.reserve(argv_copy.size() + 1);
+    for (auto& arg : argv_copy) {
+      argv_c.push_back(arg.data());
+    }
+    argv_c.push_back(nullptr);
+
+    std::vector<std::string> envp_copy = spec.envp;
+    std::vector<char*> envp_c;
+    envp_c.reserve(envp_copy.size() + 1);
+    for (auto& entry : envp_copy) {
+      envp_c.push_back(entry.data());
+    }
+    envp_c.push_back(nullptr);
+
+    std::string exec_path = resolve_exec_path(argv_copy.front(), envp_copy, spec.cwd);
+
     pid_t pid = ::fork();
     if (pid == -1) {
       for (int fd : opened_fds) {
@@ -630,26 +688,9 @@ class PosixBackend final : public Backend {
         }
       }
 
-      // Close any inherited file descriptors to avoid leaking them into exec'ed children.
-      close_open_fds_except(error_write_fd);
+      close_inherited_fds_after_fork(error_write_fd);
 
-      // Apply requested environment before exec.
-      auto env_result = apply_env(spec.envp);
-      if (!env_result) {
-        int err = errno;
-        ::write(error_write_fd, &err, sizeof(err));
-        _exit(kExecFailureExitCode);
-      }
-
-      std::vector<std::string> argv_copy = spec.argv;
-      std::vector<char*> argv_c;
-      argv_c.reserve(argv_copy.size() + 1);
-      for (auto& arg : argv_copy) {
-        argv_c.push_back(arg.data());
-      }
-      argv_c.push_back(nullptr);
-
-      ::execvp(argv_c[0], argv_c.data());
+      ::execve(exec_path.c_str(), argv_c.data(), envp_c.data());
 
       int err = errno;
       ::write(error_write_fd, &err, sizeof(err));
@@ -676,6 +717,7 @@ class PosixBackend final : public Backend {
       return make_errno_error("read");
     }
     if (read_result > 0) {
+      reap_child_after_exec_failure(pid);
       for (int fd : opened_fds) {
         if (fd == error_read_fd || fd == error_write_fd) {
           continue;
