@@ -13,7 +13,7 @@ Checks: >-
   cppcoreguidelines-pro-type-const-cast,
   cppcoreguidelines-pro-type-reinterpret-cast
 
-WarningsAsErrors: true
+WarningsAsErrors: "*"
 
-HeaderFilterRegex: '(^|.*/)(include/procly/|src/|tests/).*'
+HeaderFilterRegex: '.*'
 SystemHeaders: false
