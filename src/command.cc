@@ -110,6 +110,22 @@ Result<ExitStatus> Command::status() const {
   if (!child_result) {
     return child_result.error();
   }
+
+  auto stdin_pipe = child_result->take_stdin();
+  if (stdin_pipe) {
+    stdin_pipe->close();
+  }
+
+  auto stdout_pipe = child_result->take_stdout();
+  auto stderr_pipe = child_result->take_stderr();
+  if (stdout_pipe || stderr_pipe) {
+    auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
+                                         stderr_pipe ? &*stderr_pipe : nullptr);
+    if (!drained) {
+      return drained.error();
+    }
+  }
+
   return child_result->wait();
 }
 
@@ -125,6 +141,11 @@ Result<Output> Command::output() const {
   }
 
   Child child = internal::ChildAccess::from_spawned(spawned.value());
+
+  auto stdin_pipe = child.take_stdin();
+  if (stdin_pipe) {
+    stdin_pipe->close();
+  }
 
   auto stdout_pipe = child.take_stdout();
   auto stderr_pipe = child.take_stderr();

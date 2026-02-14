@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <chrono>
 #include <csignal>
 #include <optional>
@@ -11,6 +12,12 @@
 #include "procly/internal/access.hpp"
 #include "procly/internal/backend.hpp"
 #include "procly/pipeline.hpp"
+#include "procly/platform.hpp"
+
+#if PROCLY_PLATFORM_POSIX
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace procly {
 namespace {
@@ -107,6 +114,122 @@ class FakeBackend final : public internal::Backend {
   std::optional<Error> kill_error;
   std::optional<Error> signal_error;
 };
+
+#if PROCLY_PLATFORM_POSIX
+bool fd_is_open(std::optional<int> fd) {
+  if (!fd.has_value()) {
+    return false;
+  }
+  errno = 0;
+  return ::fcntl(*fd, F_GETFD) != -1 || errno != EBADF;
+}
+
+class PipeLifecycleBackend final : public internal::Backend {
+ public:
+  struct WaitObservation {
+    int pid;
+    bool stdin_open;
+    bool stdout_open;
+    bool stderr_open;
+  };
+
+  ~PipeLifecycleBackend() override {
+    for (int fd : tracked_fds_) {
+      if (fd >= 0) {
+        ::close(fd);
+      }
+    }
+  }
+
+  Result<internal::Spawned> spawn(const internal::SpawnSpec& spec) override {
+    internal::Spawned spawned;
+    spawned.pid = next_pid_++;
+
+    auto stdin_fd = create_parent_pipe_end(spec.stdin_spec.kind, true);
+    if (!stdin_fd) {
+      return stdin_fd.error();
+    }
+    spawned.stdin_fd = stdin_fd.value();
+
+    auto stdout_fd = create_parent_pipe_end(spec.stdout_spec.kind, false);
+    if (!stdout_fd) {
+      return stdout_fd.error();
+    }
+    spawned.stdout_fd = stdout_fd.value();
+
+    auto stderr_fd = create_parent_pipe_end(spec.stderr_spec.kind, false);
+    if (!stderr_fd) {
+      return stderr_fd.error();
+    }
+    spawned.stderr_fd = stderr_fd.value();
+
+    return spawned;
+  }
+
+  Result<ExitStatus> wait(internal::Spawned& spawned,
+                          std::optional<std::chrono::milliseconds> timeout,
+                          std::chrono::milliseconds kill_grace) override {
+    wait_calls.push_back({spawned.pid, timeout, kill_grace});
+    wait_observations.push_back({
+        spawned.pid,
+        fd_is_open(spawned.stdin_fd),
+        fd_is_open(spawned.stdout_fd),
+        fd_is_open(spawned.stderr_fd),
+    });
+    return ExitStatus::exited(0);
+  }
+
+  Result<std::optional<ExitStatus>> try_wait(internal::Spawned& spawned) override {
+    (void)spawned;
+    return std::optional<ExitStatus>{};
+  }
+
+  Result<void> terminate(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> kill(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> signal(internal::Spawned& spawned, int signo) override {
+    (void)spawned;
+    (void)signo;
+    return {};
+  }
+
+  std::vector<FakeBackend::WaitCall> wait_calls;
+  std::vector<WaitObservation> wait_observations;
+
+ private:
+  Result<std::optional<int>> create_parent_pipe_end(internal::StdioSpec::Kind kind,
+                                                    bool parent_gets_write_end) {
+    if (kind != internal::StdioSpec::Kind::piped) {
+      return std::optional<int>{};
+    }
+
+    int fds[2] = {-1, -1};
+    if (::pipe(fds) == -1) {
+      return Error{.code = std::error_code(errno, std::system_category()), .context = "pipe"};
+    }
+
+    if (parent_gets_write_end) {
+      ::close(fds[0]);
+      tracked_fds_.push_back(fds[1]);
+      return std::optional<int>(fds[1]);
+    }
+
+    ::close(fds[1]);
+    tracked_fds_.push_back(fds[0]);
+    return std::optional<int>(fds[0]);
+  }
+
+  int next_pid_ = 100;
+  std::vector<int> tracked_fds_;
+};
+#endif
 
 }  // namespace
 
@@ -350,5 +473,67 @@ TEST(BackendInjectionTest, CommandOutputUsesInjectedBackend) {
   EXPECT_EQ(backend.spawn_calls, 1);
   EXPECT_EQ(backend.wait_calls.size(), 1u);
 }
+
+#if PROCLY_PLATFORM_POSIX
+TEST(BackendInjectionTest, CommandStatusClosesPipedStdioBeforeWait) {
+  PipeLifecycleBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Command cmd("echo");
+  cmd.stdin(Stdio::piped());
+  cmd.stdout(Stdio::piped());
+  cmd.stderr(Stdio::piped());
+
+  auto status = cmd.status();
+  ASSERT_TRUE(status.has_value());
+  ASSERT_EQ(backend.wait_observations.size(), 1u);
+  EXPECT_FALSE(backend.wait_observations[0].stdin_open);
+  EXPECT_FALSE(backend.wait_observations[0].stdout_open);
+  EXPECT_FALSE(backend.wait_observations[0].stderr_open);
+}
+
+TEST(BackendInjectionTest, CommandOutputClosesPipedStdinBeforeWait) {
+  PipeLifecycleBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Command cmd("echo");
+  cmd.stdin(Stdio::piped());
+
+  auto output = cmd.output();
+  ASSERT_TRUE(output.has_value());
+  ASSERT_EQ(backend.wait_observations.size(), 1u);
+  EXPECT_FALSE(backend.wait_observations[0].stdin_open);
+}
+
+TEST(BackendInjectionTest, PipelineStatusClosesPipedStdioBeforeWait) {
+  PipeLifecycleBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Pipeline pipeline = Command("echo") | Command("cat");
+  pipeline.stdin(Stdio::piped());
+  pipeline.stdout(Stdio::piped());
+  pipeline.stderr(Stdio::piped());
+
+  auto status = pipeline.status();
+  ASSERT_TRUE(status.has_value());
+  ASSERT_EQ(backend.wait_observations.size(), 2u);
+  EXPECT_FALSE(backend.wait_observations[0].stdin_open);
+  EXPECT_FALSE(backend.wait_observations[1].stdout_open);
+  EXPECT_FALSE(backend.wait_observations[1].stderr_open);
+}
+
+TEST(BackendInjectionTest, PipelineOutputClosesPipedStdinBeforeWait) {
+  PipeLifecycleBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Pipeline pipeline = Command("echo") | Command("cat");
+  pipeline.stdin(Stdio::piped());
+
+  auto output = pipeline.output();
+  ASSERT_TRUE(output.has_value());
+  ASSERT_EQ(backend.wait_observations.size(), 2u);
+  EXPECT_FALSE(backend.wait_observations[0].stdin_open);
+}
+#endif
 
 }  // namespace procly

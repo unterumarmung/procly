@@ -300,6 +300,14 @@ bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout) {
   return false;
 }
 
+#if PROCLY_HAS_THREAD_SANITIZER
+constexpr std::chrono::milliseconds kPidFileWaitTimeout{5000};
+constexpr std::chrono::milliseconds kProcessExitWaitTimeout{5000};
+#else
+constexpr std::chrono::milliseconds kPidFileWaitTimeout{1000};
+constexpr std::chrono::milliseconds kProcessExitWaitTimeout{1000};
+#endif
+
 std::vector<int> read_fd_list(const std::filesystem::path& path) {
   std::ifstream file(path);
   std::vector<int> fds;
@@ -430,14 +438,12 @@ TEST(CommandIntegrationTest, EnvClearAndSet) {
   Command cmd(helper);
   cmd.arg("--print-env").arg("PROCLY_ENV_TEST");
   cmd.env_clear();
-#if defined(__has_feature)
-#if __has_feature(undefined_behavior_sanitizer)
+#if PROCLY_HAS_UNDEFINED_BEHAVIOR_SANITIZER
   // Keep sanitizer runtime discoverable after env_clear() in UBSan builds.
   const char* ld_library_path = std::getenv("LD_LIBRARY_PATH");
   if (ld_library_path && *ld_library_path) {
     cmd.env("LD_LIBRARY_PATH", ld_library_path);
   }
-#endif
 #endif
   cmd.env("PROCLY_ENV_TEST", "value");
   auto output = cmd.output();
@@ -986,7 +992,7 @@ TEST(PipelineIntegrationTest, TerminateKillsGrandchildInProcessGroup) {
   auto stdin_pipe = child_result->take_stdin();
   ASSERT_TRUE(stdin_pipe.has_value());
 
-  pid_t grandchild_pid = wait_for_pid_file(pid_path, std::chrono::milliseconds(1000));
+  pid_t grandchild_pid = wait_for_pid_file(pid_path, kPidFileWaitTimeout);
   ASSERT_GT(grandchild_pid, 0);
 
   auto term_result = child_result->terminate();
@@ -997,7 +1003,7 @@ TEST(PipelineIntegrationTest, TerminateKillsGrandchildInProcessGroup) {
   ASSERT_TRUE(wait_result.has_value())
       << wait_result.error().context << " " << wait_result.error().code.message();
 
-  bool exited = wait_for_process_exit(grandchild_pid, std::chrono::milliseconds(1000));
+  bool exited = wait_for_process_exit(grandchild_pid, kProcessExitWaitTimeout);
   if (!exited) {
     ::kill(grandchild_pid, SIGKILL);
   }
@@ -1040,7 +1046,7 @@ TEST(CommandIntegrationTest, FdCountStableAfterRepeatedOutput) {
 }
 
 TEST(CommandIntegrationTest, NoFdLeakIntoGrandchild) {
-#if defined(__SANITIZE_THREAD__) || (defined(__has_feature) && __has_feature(thread_sanitizer))
+#if PROCLY_HAS_THREAD_SANITIZER
   GTEST_SKIP() << "TSan runtime keeps extra file descriptors open in child processes.";
 #endif
   std::string helper = helper_path();
