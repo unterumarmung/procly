@@ -61,7 +61,6 @@ jobs:
 
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
-    needs: [ test_release ]
     strategy:
       fail-fast: false
       matrix:
