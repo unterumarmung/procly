@@ -300,6 +300,14 @@ bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout) {
   return false;
 }
 
+#if PROCLY_HAS_THREAD_SANITIZER
+constexpr std::chrono::milliseconds kPidFileWaitTimeout{5000};
+constexpr std::chrono::milliseconds kProcessExitWaitTimeout{5000};
+#else
+constexpr std::chrono::milliseconds kPidFileWaitTimeout{1000};
+constexpr std::chrono::milliseconds kProcessExitWaitTimeout{1000};
+#endif
+
 std::vector<int> read_fd_list(const std::filesystem::path& path) {
   std::ifstream file(path);
   std::vector<int> fds;
@@ -984,7 +992,7 @@ TEST(PipelineIntegrationTest, TerminateKillsGrandchildInProcessGroup) {
   auto stdin_pipe = child_result->take_stdin();
   ASSERT_TRUE(stdin_pipe.has_value());
 
-  pid_t grandchild_pid = wait_for_pid_file(pid_path, std::chrono::milliseconds(1000));
+  pid_t grandchild_pid = wait_for_pid_file(pid_path, kPidFileWaitTimeout);
   ASSERT_GT(grandchild_pid, 0);
 
   auto term_result = child_result->terminate();
@@ -995,7 +1003,7 @@ TEST(PipelineIntegrationTest, TerminateKillsGrandchildInProcessGroup) {
   ASSERT_TRUE(wait_result.has_value())
       << wait_result.error().context << " " << wait_result.error().code.message();
 
-  bool exited = wait_for_process_exit(grandchild_pid, std::chrono::milliseconds(1000));
+  bool exited = wait_for_process_exit(grandchild_pid, kProcessExitWaitTimeout);
   if (!exited) {
     ::kill(grandchild_pid, SIGKILL);
   }
