@@ -56,12 +56,27 @@ jobs:
 
       - name: Tests
         run: |
+          set +e
           bazel test //... \
-            --test_output=errors --verbose_failures
+            --remote_download_outputs=all \
+            --test_output=streamed \
+            --test_summary=short --verbose_failures
+          rc=$?
+          set -e
+
+          if [[ ${rc} -ne 0 ]]; then
+            echo "Bazel tests failed; dumping bazel-testlogs test.log files"
+            while IFS= read -r -d '' log; do
+              echo "::group::${log}"
+              sed -n '1,400p' "${log}" || true
+              echo "::endgroup::"
+            done < <(find bazel-testlogs -type f -name "test.log" -print0 2>/dev/null)
+          fi
+
+          exit ${rc}
 
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
-    needs: [ test_release ]
     strategy:
       fail-fast: false
       matrix:
@@ -79,8 +94,24 @@ jobs:
 
       - name: Tests (${{ matrix.cfg }})
         run: |
+          set +e
           bazel test --config=${{ matrix.cfg }} //... \
-            --test_output=errors --verbose_failures
+            --remote_download_outputs=all \
+            --test_output=streamed \
+            --test_summary=short --verbose_failures
+          rc=$?
+          set -e
+
+          if [[ ${rc} -ne 0 ]]; then
+            echo "Bazel tests failed; dumping bazel-testlogs test.log files"
+            while IFS= read -r -d '' log; do
+              echo "::group::${log}"
+              sed -n '1,400p' "${log}" || true
+              echo "::endgroup::"
+            done < <(find bazel-testlogs -type f -name "test.log" -print0 2>/dev/null)
+          fi
+
+          exit ${rc}
 
   docs_build:
     name: docs (build)
