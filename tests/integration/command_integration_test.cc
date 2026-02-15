@@ -632,16 +632,13 @@ TEST(CommandIntegrationTest, ForkPathClosesFdsOpenedBetweenPreparationAndFork) {
   std::string helper = helper_path();
   ASSERT_FALSE(helper.empty());
 
-  auto baseline_fds = baseline_helper_fds(helper);
-  ASSERT_FALSE(baseline_fds.empty());
-  std::unordered_set<int> allowed_fds(baseline_fds.begin(), baseline_fds.end());
-
   std::filesystem::path fd_path = unique_temp_path("fork_fd_race");
   std::error_code remove_ec;
   std::filesystem::remove(fd_path, remove_ec);
 
+  int injected_fd = -1;
   {
-    ScopedForkCapture fork_capture(/*inject_fd=*/true);
+    ScopedForkCapture fork_capture(/*inject_fd=*/true, /*use_high_injected_fd=*/true);
     Command cmd(helper);
     cmd.arg("--write-open-fds").arg(fd_path.string());
     cmd.stdin(Stdio::null());
@@ -651,13 +648,22 @@ TEST(CommandIntegrationTest, ForkPathClosesFdsOpenedBetweenPreparationAndFork) {
     auto status = cmd.status();
     ASSERT_TRUE(status.has_value())
         << status.error().context << " " << status.error().code.message();
+
+    injected_fd = fork_capture.last_injected_fd();
+    ASSERT_GE(injected_fd, kInjectedFdLowerBound);
   }
 
   auto fds = read_fd_list(fd_path);
   ASSERT_FALSE(fds.empty());
+
+  bool leaked_injected_fd = false;
   for (int fd : fds) {
-    EXPECT_TRUE(allowed_fds.find(fd) != allowed_fds.end());
+    if (fd == injected_fd) {
+      leaked_injected_fd = true;
+      break;
+    }
   }
+  EXPECT_FALSE(leaked_injected_fd) << "injected fd leaked into child: " << injected_fd;
   std::filesystem::remove(fd_path, remove_ec);
 }
 
