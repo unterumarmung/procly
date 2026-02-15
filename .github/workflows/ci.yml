@@ -58,6 +58,7 @@ jobs:
         run: |
           set +e
           bazel test //... \
+            --remote_download_outputs=all \
             --test_output=streamed \
             --test_summary=short --verbose_failures
           rc=$?
@@ -95,6 +96,7 @@ jobs:
         run: |
           set +e
           bazel test --config=${{ matrix.cfg }} //... \
+            --remote_download_outputs=all \
             --test_output=streamed \
             --test_summary=short --verbose_failures
           rc=$?
