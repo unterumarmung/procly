@@ -25,6 +25,11 @@ common --downloader_config=tools/downloader.cfg
 common --@rules_python//python/config_settings:bootstrap_impl=script
 common --workspace_status_command=githooks/check-config.sh
 
+# CI cache locations are configured in the repo so all CI Bazel invocations share them.
+common:ci --repository_cache=~/.cache/bazel-repo
+common:ci --repo_contents_cache=~/.cache/bazel-repo/contents
+common:ci --disk_cache=~/.cache/bazel-disk
+
 
 
 common:lint --aspects=//tools/lint:linters.bzl%clang_tidy

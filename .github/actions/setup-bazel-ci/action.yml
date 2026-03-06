@@ -1,0 +1,64 @@
+name: Setup Bazel CI
+description: Restore Bazel caches for CI and install Bazelisk.
+
+inputs:
+  metadata-hash:
+    description: Hash of Bazel metadata inputs used to scope cache restore prefixes.
+    required: true
+  repo-cache-path:
+    description: Path to the Bazel repository cache directory.
+    required: true
+  disk-cache-path:
+    description: Path to the Bazel disk cache directory.
+    required: true
+
+outputs:
+  repo-cache-hit:
+    description: Whether the Bazel repository cache matched the primary key.
+    value: ${{ steps.restore-bazel-repo-cache.outputs.cache-hit }}
+  repo-primary-key:
+    description: Primary key used for the Bazel repository cache restore.
+    value: ${{ steps.restore-bazel-repo-cache.outputs.cache-primary-key }}
+  disk-cache-hit:
+    description: Whether the Bazel disk cache matched the primary key.
+    value: ${{ steps.restore-bazel-disk-cache.outputs.cache-hit }}
+  disk-primary-key:
+    description: Primary key used for the Bazel disk cache restore.
+    value: ${{ steps.restore-bazel-disk-cache.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    # Adapted from https://github.com/cerisier/toolchains_llvm_bootstrapped
+    # Cache build and external artifacts so that the next ci build is incremental.
+    # Because github action caches cannot be updated after a build, we need to
+    # store the contents of each build in a unique cache key, then fall back to loading
+    # it on the next ci run. We use hashFiles(...) in the key and restore-keys- with
+    # the prefix to load the most recent cache for the branch on a cache miss. You
+    # should customize the contents of hashFiles to capture any bazel input sources,
+    # although this doesn't need to be perfect. If none of the input sources change
+    # then a cache hit will load an existing cache and bazel won't have to do any work.
+    # In the case of a cache miss, you want the fallback cache to contain most of the
+    # previously built artifacts to minimize build time. The more precise you are with
+    # hashFiles sources the less work bazel will have to do.
+    - name: Restore Bazel repository cache
+      id: restore-bazel-repo-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.repo-cache-path }}
+        key: bazel-repo-cache-${{ runner.os }}-${{ inputs.metadata-hash }}-${{ github.sha }}
+        restore-keys: |
+          bazel-repo-cache-${{ runner.os }}-${{ inputs.metadata-hash }}-
+          bazel-repo-cache-${{ runner.os }}-
+    - name: Restore Bazel disk cache
+      id: restore-bazel-disk-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ inputs.disk-cache-path }}
+        key: bazel-disk-cache-${{ runner.os }}-${{ inputs.metadata-hash }}-${{ github.sha }}
+        restore-keys: |
+          bazel-disk-cache-${{ runner.os }}-${{ inputs.metadata-hash }}-
+          bazel-disk-cache-${{ runner.os }}-
+    - uses: bazel-contrib/setup-bazel@0.18.0
+      with:
+        bazelisk-cache: true
