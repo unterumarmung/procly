@@ -1,6 +1,5 @@
 #include "procly/internal/clock.hpp"
 
-#include <atomic>
 #include <thread>
 
 namespace procly::internal {
@@ -16,17 +15,18 @@ class SteadyClock final : public Clock {
   }
 };
 
-std::atomic<Clock*> g_clock_override{nullptr};
+thread_local Clock* g_clock_override = nullptr;
 
 }  // namespace
 
-ScopedClockOverride::ScopedClockOverride(Clock& clock)
-    : previous_(g_clock_override.exchange(&clock)) {}
+ScopedClockOverride::ScopedClockOverride(Clock& clock) : previous_(g_clock_override) {
+  g_clock_override = &clock;
+}
 
-ScopedClockOverride::~ScopedClockOverride() { g_clock_override.store(previous_); }
+ScopedClockOverride::~ScopedClockOverride() { g_clock_override = previous_; }
 
 Clock& default_clock() {
-  if (auto* override_clock = g_clock_override.load()) {
+  if (auto* override_clock = g_clock_override) {
     return *override_clock;
   }
   static SteadyClock clock;

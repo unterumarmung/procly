@@ -33,6 +33,7 @@ procly is for when you want:
 - predictable semantics (no shell, no quoting rules)
 - robust capture that doesn’t hang under load
 - pipelines that feel like the shell, but behave like a library
+- timeout handling that preserves the final exit status and escalation details
 
 ## Quickstart
 
@@ -74,7 +75,11 @@ auto in = child->take_stdin();
 auto out = child->take_stdout();
 
 if (in && out) {
-  in->write_all("hello\n");
+  auto write = in->write_all("hello\n");
+  if (!write) {
+    std::cerr << write.error().code.message() << "\n";
+    return;
+  }
   in->close();
 
   auto data = out->read_all();
@@ -126,7 +131,7 @@ The core API exposes:
 
 - `Command(program)`
 - `.arg(...)`, `.args(...)`
-- `.env(k, v)`, `.env_remove(k)`, `.env_clear()`
+- `.env(k, v)`, `.env_remove(k)`, `.env_clear()` (clears inherited env and queued overrides)
 - `.current_dir(path)`
 - `.stdin(Stdio)`, `.stdout(Stdio)`, `.stderr(Stdio)`
 - `.options(SpawnOptions)`
@@ -145,15 +150,17 @@ The core API exposes:
 
 - `child.id()`
 - `child.take_stdin()`, `child.take_stdout()`, `child.take_stderr()`
-- `child.wait()`, `child.try_wait()`, `child.wait(WaitOptions)`
+- `child.wait()`, `child.try_wait()`, `child.wait(WaitOptions)` (`WaitResult`)
 - `child.terminate()`, `child.kill()`
+- `Child` handles are not thread-safe
 
 ### Pipeline
 
 - `Command | Command` → `Pipeline`
-- `Pipeline::pipefail(true)`
+- `Pipeline::pipefail(true)` (last non-zero stage, matching shell `pipefail`)
 - `Pipeline::new_process_group(true)`
 - `Pipeline::spawn()`, `Pipeline::status()`, `Pipeline::output()`
+- `PipelineChild` handles are not thread-safe
 
 ## Install
 
@@ -214,6 +221,14 @@ bazel build --config=cxx17 //:procly
 
 ```sh
 bazel test //...
+```
+
+Sanitizers:
+
+```sh
+bazel test --config=asan //...
+bazel test --config=ubsan //...
+bazel test --config=tsan //...
 ```
 
 ### Format

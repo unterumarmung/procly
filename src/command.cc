@@ -67,6 +67,7 @@ Command& Command::env_remove(std::string_view key) {
 
 Command& Command::env_clear() {
   inherit_env_ = false;
+  env_delta_.clear();
   return *this;
 }
 
@@ -101,6 +102,7 @@ Result<Child> Command::spawn() const {
   if (!spawned) {
     return spawned.error();
   }
+  spawned->backend = &backend;
 
   return internal::ChildAccess::from_spawned(spawned.value());
 }
@@ -139,6 +141,7 @@ Result<Output> Command::output() const {
   if (!spawned) {
     return spawned.error();
   }
+  spawned->backend = &backend;
 
   Child child = internal::ChildAccess::from_spawned(spawned.value());
 

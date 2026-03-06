@@ -117,6 +117,15 @@ TEST(LoweringTest, EnvironmentClearAndOverride) {
   EXPECT_FALSE(env_contains(result->envp, "PROCLY_TEST_ENV", "one"));
 }
 
+TEST(LoweringTest, EnvironmentClearResetsQueuedOverrides) {
+  Command cmd("echo");
+  cmd.env("PROCLY_TEST_ENV", "before");
+  cmd.env_clear();
+  auto result = internal::lower_command(cmd, internal::SpawnMode::spawn, nullptr);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(env_contains(result->envp, "PROCLY_TEST_ENV", "before"));
+}
+
 TEST(LoweringTest, EnvironmentRemoveKey) {
   ::setenv("PROCLY_TEST_ENV_REMOVE", "one", 1);
   Command cmd("echo");

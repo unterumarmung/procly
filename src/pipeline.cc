@@ -63,20 +63,19 @@ void cleanup_partially_spawned_pipeline(std::vector<internal::Spawned>* spawned,
   if (spawned == nullptr || spawned->empty()) {
     return;
   }
-  auto& backend = internal::default_backend();
 
   // Kill first so failed pipeline creation cannot leave background processes running.
   if (new_process_group) {
-    (void)backend.kill(spawned->front());
+    (void)internal::backend_for(spawned->front()).kill(spawned->front());
   } else {
     for (auto& stage : *spawned) {
-      (void)backend.kill(stage);
+      (void)internal::backend_for(stage).kill(stage);
     }
   }
 
   // Reap every stage to avoid zombies after a mid-pipeline spawn failure.
   for (auto& stage : *spawned) {
-    (void)backend.wait(stage, std::nullopt, std::chrono::milliseconds(0));
+    (void)internal::backend_for(stage).wait(stage, std::nullopt, std::chrono::milliseconds(0));
   }
 }
 
@@ -100,10 +99,13 @@ static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::
     }
   }
 
-  std::vector<internal::Spawned> spawned;
-  spawned.reserve(stage_count);
+  struct PreparedStage {
+    internal::SpawnSpec spec;
+    bool joins_pipeline_group = false;
+  };
 
-  std::optional<int> pipeline_pgid;
+  std::vector<PreparedStage> prepared_stages;
+  prepared_stages.reserve(stage_count);
 
   for (std::size_t index = 0; index < stage_count; ++index) {
     const auto& stage_spec = pipeline_spec.stages[index];
@@ -122,20 +124,36 @@ static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::
       return spec_result.error();
     }
 
-    auto spec = std::move(spec_result.value());
-    if (pipeline_spec.new_process_group) {
-      if (!pipeline_pgid) {
-        spec.opts.new_process_group = true;
-      } else {
-        spec.process_group = pipeline_pgid;
-      }
+    PreparedStage prepared{
+        .spec = std::move(spec_result.value()),
+        .joins_pipeline_group = pipeline_spec.new_process_group && index > 0,
+    };
+    if (pipeline_spec.new_process_group && index == 0) {
+      prepared.spec.opts.new_process_group = true;
+    }
+    prepared_stages.push_back(std::move(prepared));
+  }
+
+  std::vector<internal::Spawned> spawned;
+  spawned.reserve(stage_count);
+
+  std::optional<int> pipeline_pgid;
+  auto& backend = internal::default_backend();
+
+  for (std::size_t index = 0; index < stage_count; ++index) {
+    auto spec = prepared_stages[index].spec;
+    if (prepared_stages[index].joins_pipeline_group) {
+      spec.process_group = pipeline_pgid;
+    } else {
+      spec.process_group.reset();
     }
 
-    auto spawned_result = internal::default_backend().spawn(spec);
+    auto spawned_result = backend.spawn(spec);
     if (!spawned_result) {
       cleanup_partially_spawned_pipeline(&spawned, pipeline_spec.new_process_group);
       return spawned_result.error();
     }
+    spawned_result->backend = &backend;
 
     if (internal::PipelineAccess::new_process_group(pipeline) && !pipeline_pgid) {
       pipeline_pgid = spawned_result->pgid;
@@ -233,6 +251,7 @@ Result<Output> Pipeline::output() const {
   return output;
 }
 
+PipelineChild::PipelineChild() = default;
 PipelineChild::PipelineChild(PipelineChild&& other) noexcept = default;
 PipelineChild& PipelineChild::operator=(PipelineChild&& other) noexcept = default;
 PipelineChild::~PipelineChild() = default;
@@ -274,11 +293,11 @@ Result<PipelineStatus> PipelineChild::wait() {
 
   for (auto& spawned : impl_->spawned) {
     auto wait_result =
-        internal::default_backend().wait(spawned, std::nullopt, std::chrono::milliseconds(0));
+        internal::backend_for(spawned).wait(spawned, std::nullopt, std::chrono::milliseconds(0));
     if (!wait_result) {
       return wait_result.error();
     }
-    status.stages.push_back(wait_result.value());
+    status.stages.push_back(wait_result->status);
   }
 
   if (status.stages.empty()) {
@@ -290,9 +309,9 @@ Result<PipelineStatus> PipelineChild::wait() {
     return status;
   }
 
-  for (const auto& stage : status.stages) {
-    if (!stage.success()) {
-      status.aggregate = stage;
+  for (auto it = status.stages.rbegin(); it != status.stages.rend(); ++it) {
+    if (!it->success()) {
+      status.aggregate = *it;
       return status;
     }
   }
@@ -306,11 +325,11 @@ Result<void> PipelineChild::terminate() {
   }
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {
-    return internal::default_backend().terminate(impl_->spawned.front());
+    return internal::backend_for(impl_->spawned.front()).terminate(impl_->spawned.front());
   }
 
   for (auto& spawned : impl_->spawned) {
-    auto result = internal::default_backend().terminate(spawned);
+    auto result = internal::backend_for(spawned).terminate(spawned);
     if (!result) {
       return result;
     }
@@ -324,11 +343,11 @@ Result<void> PipelineChild::kill() {
   }
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {
-    return internal::default_backend().kill(impl_->spawned.front());
+    return internal::backend_for(impl_->spawned.front()).kill(impl_->spawned.front());
   }
 
   for (auto& spawned : impl_->spawned) {
-    auto result = internal::default_backend().kill(spawned);
+    auto result = internal::backend_for(spawned).kill(spawned);
     if (!result) {
       return result;
     }

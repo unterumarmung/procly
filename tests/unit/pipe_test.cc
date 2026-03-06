@@ -3,6 +3,8 @@
 #include <fcntl.h>
 #include <gtest/gtest.h>
 
+#include <cerrno>
+
 #include "procly/internal/fd.hpp"
 
 namespace procly {
@@ -24,6 +26,20 @@ TEST(PipeTest, WriteAndReadAll) {
   auto read_result = reader.read_all();
   ASSERT_TRUE(read_result.has_value());
   EXPECT_EQ(read_result.value(), payload);
+}
+
+TEST(PipeTest, BrokenPipeReturnsError) {
+  auto pipe_result = internal::create_pipe();
+  ASSERT_TRUE(pipe_result.has_value());
+
+  PipeReader reader(pipe_result->first.release());
+  PipeWriter writer(pipe_result->second.release());
+  reader.close();
+
+  auto write_result = writer.write_all("boom");
+  ASSERT_FALSE(write_result.has_value());
+  EXPECT_EQ(write_result.error().code.category(), std::system_category());
+  EXPECT_EQ(write_result.error().code.value(), EPIPE);
 }
 
 #if PROCLY_PLATFORM_POSIX

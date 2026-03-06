@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 
+#include "procly/child.hpp"
 #include "procly/internal/clock.hpp"
 #include "procly/result.hpp"
 #include "procly/status.hpp"
@@ -17,7 +18,7 @@ struct WaitOps {
   std::function<Result<void>()> kill;
 };
 
-Result<ExitStatus> wait_with_timeout(WaitOps& ops, Clock& clock,
+Result<WaitResult> wait_with_timeout(WaitOps& ops, Clock& clock,
                                      std::optional<std::chrono::milliseconds> timeout,
                                      std::chrono::milliseconds kill_grace);
 

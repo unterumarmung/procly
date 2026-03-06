@@ -1,6 +1,18 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
 
 cc_test(
+    name = "concurrency_smoke_test",
+    srcs = ["concurrency_smoke_test.cc"],
+    data = ["//tests/helpers:procly_child"],
+    tags = ["integration"],
+    deps = [
+        "//:procly",
+        "//tests/helpers:runfiles_support",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "command_integration_test",
     srcs = ["command_integration_test.cc"],
     data = ["//tests/helpers:procly_child"],
@@ -49,5 +61,6 @@ test_suite(
         ":command_integration_test",
         ":command_integration_test_force_fork",
         ":command_integration_test_force_spawn",
+        ":concurrency_smoke_test",
     ],
 )
