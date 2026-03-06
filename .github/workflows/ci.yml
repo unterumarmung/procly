@@ -31,7 +31,7 @@ jobs:
 
       - name: Prepare bazel-env
         run: |
-          bazel --config=ci run //tools:bazel_env print-path >> "$GITHUB_PATH"
+          bazel run --config=ci //tools:bazel_env print-path >> "$GITHUB_PATH"
 
       - name: Format (must be clean)
         run: |
@@ -59,7 +59,7 @@ jobs:
 
       - name: Tests
         run: |
-          bazel --config=ci test //... \
+          bazel test --config=ci //... \
             --test_output=errors --verbose_failures
 
       - name: Save Bazel repository cache
@@ -93,7 +93,7 @@ jobs:
 
       - name: Tests (dbg)
         run: |
-          bazel --config=ci test -c dbg //... \
+          bazel test --config=ci -c dbg //... \
             --test_output=errors --verbose_failures
 
   sanitizers:
@@ -114,7 +114,7 @@ jobs:
 
       - name: Tests (${{ matrix.cfg }})
         run: |
-          bazel --config=ci test --config=${{ matrix.cfg }} //... \
+          bazel test --config=ci --config=${{ matrix.cfg }} //... \
             --test_output=errors --verbose_failures
 
   docs_build:
@@ -130,7 +130,7 @@ jobs:
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Build Doxygen HTML
-        run: bazel --config=ci build //docs:api_docs
+        run: bazel build --config=ci //docs:api_docs
 
       - name: Stage site
         run: |
