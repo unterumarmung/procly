@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "procly/internal/concurrent_use_guard.hpp"
 #include "procly/platform.hpp"
 #include "procly/result.hpp"
 
@@ -14,6 +15,9 @@
 namespace procly {
 
 /// @brief Read end of a pipe owned by procly.
+///
+/// PipeReader handles are not safe for concurrent shared use from multiple
+/// threads.
 class PipeReader {
  public:
   /// @brief Construct an empty reader.
@@ -30,7 +34,11 @@ class PipeReader {
   ~PipeReader();
 
   /// @brief Native file descriptor handle.
-  [[nodiscard]] int native_handle() const noexcept { return fd_; }
+  [[nodiscard]] int native_handle() const noexcept {
+    auto use = concurrent_use_.enter("PipeReader");
+    (void)use;
+    return fd_;
+  }
   /// @brief Close the pipe.
   void close() noexcept;
 
@@ -46,9 +54,14 @@ class PipeReader {
  private:
   /// @brief Native file descriptor, or -1 if empty.
   int fd_{-1};
+  /// @brief Detect unsupported concurrent shared use of the reader.
+  mutable internal::ConcurrentUseGuard concurrent_use_;
 };
 
 /// @brief Write end of a pipe owned by procly.
+///
+/// PipeWriter handles are not safe for concurrent shared use from multiple
+/// threads.
 class PipeWriter {
  public:
   /// @brief Construct an empty writer.
@@ -65,7 +78,11 @@ class PipeWriter {
   ~PipeWriter();
 
   /// @brief Native file descriptor handle.
-  [[nodiscard]] int native_handle() const noexcept { return fd_; }
+  [[nodiscard]] int native_handle() const noexcept {
+    auto use = concurrent_use_.enter("PipeWriter");
+    (void)use;
+    return fd_;
+  }
   /// @brief Close the pipe.
   void close() noexcept;
 
@@ -81,6 +98,8 @@ class PipeWriter {
  private:
   /// @brief Native file descriptor, or -1 if empty.
   int fd_{-1};
+  /// @brief Detect unsupported concurrent shared use of the writer.
+  mutable internal::ConcurrentUseGuard concurrent_use_;
 };
 
 }  // namespace procly

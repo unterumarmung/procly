@@ -64,6 +64,16 @@ cc_test(
 )
 
 cc_test(
+    name = "concurrent_use_contract_test",
+    srcs = ["concurrent_use_contract_test.cc"],
+    tags = ["debug_contract"],
+    deps = [
+        "//:procly",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "posix_spawn_test",
     srcs = ["posix_spawn_test.cc"],
     deps = [
@@ -103,6 +113,7 @@ test_suite(
     name = "all",
     tests = [
         ":backend_injection_test",
+        ":concurrent_use_contract_test",
         ":io_drain_test",
         ":lowering_test",
         ":pipe_test",

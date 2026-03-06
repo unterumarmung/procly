@@ -48,6 +48,7 @@ PROCLY_HDRS = [
     "include/procly/internal/access.hpp",
     "include/procly/internal/backend.hpp",
     "include/procly/internal/clock.hpp",
+    "include/procly/internal/concurrent_use_guard.hpp",
     "include/procly/internal/expected.hpp",
     "include/procly/internal/fd.hpp",
     "include/procly/internal/io_drain.hpp",

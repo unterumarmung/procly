@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "procly/command.hpp"
+#include "procly/internal/concurrent_use_guard.hpp"
 #include "procly/pipe.hpp"
 #include "procly/result.hpp"
 #include "procly/status.hpp"
@@ -30,6 +31,9 @@ struct PipelineStatus {
 class PipelineChild;
 
 /// @brief Pipeline of multiple commands connected by pipes.
+///
+/// Pipeline builders are not safe for concurrent shared use from multiple
+/// threads.
 class Pipeline {
  public:
   /// @brief Construct an empty pipeline.
@@ -50,7 +54,11 @@ class Pipeline {
   Pipeline& stderr(Stdio value);
 
   /// @brief Number of stages.
-  [[nodiscard]] std::size_t size() const noexcept { return stages_.size(); }
+  [[nodiscard]] std::size_t size() const noexcept {
+    auto use = concurrent_use_.enter("Pipeline");
+    (void)use;
+    return stages_.size();
+  }
 
   /// @brief Spawn the pipeline without waiting.
   [[nodiscard]] Result<PipelineChild> spawn() const;
@@ -72,6 +80,8 @@ class Pipeline {
   std::optional<Stdio> stdout_;
   /// @brief Optional stderr configuration for the last stage.
   std::optional<Stdio> stderr_;
+  /// @brief Detect unsupported concurrent shared use of the builder.
+  mutable internal::ConcurrentUseGuard concurrent_use_;
 
   friend Pipeline operator|(Command left, Command right);
   friend Pipeline operator|(Pipeline left, Command right);

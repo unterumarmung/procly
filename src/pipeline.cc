@@ -12,26 +12,36 @@
 namespace procly {
 
 Pipeline& Pipeline::pipefail(bool enabled) {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   pipefail_ = enabled;
   return *this;
 }
 
 Pipeline& Pipeline::new_process_group(bool enabled) {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   new_pgrp_ = enabled;
   return *this;
 }
 
 Pipeline& Pipeline::stdin(Stdio value) {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   stdin_ = std::move(value);
   return *this;
 }
 
 Pipeline& Pipeline::stdout(Stdio value) {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   stdout_ = std::move(value);
   return *this;
 }
 
 Pipeline& Pipeline::stderr(Stdio value) {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   stderr_ = std::move(value);
   return *this;
 }
@@ -56,6 +66,7 @@ struct PipelineChild::Impl {
   std::optional<PipeWriter> stdin_pipe;
   std::optional<PipeReader> stdout_pipe;
   std::optional<PipeReader> stderr_pipe;
+  internal::ConcurrentUseGuard concurrent_use;
 };
 
 void cleanup_partially_spawned_pipeline(std::vector<internal::Spawned>* spawned,
@@ -188,11 +199,15 @@ static Result<PipelineChild> spawn_pipeline(const Pipeline& pipeline, internal::
 }
 
 Result<PipelineChild> Pipeline::spawn() const {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   return spawn_pipeline(*this, internal::SpawnMode::spawn);
 }
 
 Result<ExitStatus> Pipeline::status() const {
-  auto child_result = spawn();
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
+  auto child_result = spawn_pipeline(*this, internal::SpawnMode::spawn);
   if (!child_result) {
     return child_result.error();
   }
@@ -220,6 +235,8 @@ Result<ExitStatus> Pipeline::status() const {
 }
 
 Result<Output> Pipeline::output() const {
+  auto use = concurrent_use_.enter("Pipeline");
+  (void)use;
   auto child_result = spawn_pipeline(*this, internal::SpawnMode::output);
   if (!child_result) {
     return child_result.error();
@@ -252,14 +269,36 @@ Result<Output> Pipeline::output() const {
 }
 
 PipelineChild::PipelineChild() = default;
-PipelineChild::PipelineChild(PipelineChild&& other) noexcept = default;
-PipelineChild& PipelineChild::operator=(PipelineChild&& other) noexcept = default;
+
+PipelineChild::PipelineChild(PipelineChild&& other) noexcept {
+  if (other.impl_) {
+    auto use = other.impl_->concurrent_use.enter("PipelineChild");
+    (void)use;
+    impl_ = std::move(other.impl_);
+  }
+}
+
+PipelineChild& PipelineChild::operator=(PipelineChild&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+
+  if (other.impl_) {
+    auto other_use = other.impl_->concurrent_use.enter("PipelineChild");
+    (void)other_use;
+  }
+  impl_ = std::move(other.impl_);
+  return *this;
+}
+
 PipelineChild::~PipelineChild() = default;
 
 std::optional<PipeWriter> PipelineChild::take_stdin() noexcept {
   if (!impl_) {
     return std::nullopt;
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
   auto pipe = std::move(impl_->stdin_pipe);
   impl_->stdin_pipe.reset();
   return pipe;
@@ -269,6 +308,8 @@ std::optional<PipeReader> PipelineChild::take_stdout() noexcept {
   if (!impl_) {
     return std::nullopt;
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
   auto pipe = std::move(impl_->stdout_pipe);
   impl_->stdout_pipe.reset();
   return pipe;
@@ -278,6 +319,8 @@ std::optional<PipeReader> PipelineChild::take_stderr() noexcept {
   if (!impl_) {
     return std::nullopt;
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
   auto pipe = std::move(impl_->stderr_pipe);
   impl_->stderr_pipe.reset();
   return pipe;
@@ -287,6 +330,8 @@ Result<PipelineStatus> PipelineChild::wait() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
 
   PipelineStatus status;
   status.stages.reserve(impl_->spawned.size());
@@ -323,6 +368,8 @@ Result<void> PipelineChild::terminate() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::kill_failed), .context = "terminate"};
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {
     return internal::backend_for(impl_->spawned.front()).terminate(impl_->spawned.front());
@@ -341,6 +388,8 @@ Result<void> PipelineChild::kill() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::kill_failed), .context = "kill"};
   }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
 
   if (impl_->new_process_group && !impl_->spawned.empty()) {
     return internal::backend_for(impl_->spawned.front()).kill(impl_->spawned.front());

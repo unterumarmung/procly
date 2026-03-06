@@ -22,7 +22,7 @@
 namespace procly {
 namespace {
 
-class FakeBackend final : public internal::Backend {
+class FakeBackend : public internal::Backend {
  public:
   struct WaitCall {
     int pid;

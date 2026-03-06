@@ -36,6 +36,9 @@ build:san-common -c dbg
 build:san-common --copt=-O1
 build:san-common --copt=-fno-omit-frame-pointer
 build:san-common --linkopt=-fno-omit-frame-pointer
+# Contract death tests intentionally abort in dbg builds and conflict with sanitizer signal handling.
+# Keep them in the explicit dbg CI job and exclude them from shared sanitizer configs.
+test:san-common --test_tag_filters=-debug_contract
 
 # ---- ASan ----
 build:asan --config=san-common
