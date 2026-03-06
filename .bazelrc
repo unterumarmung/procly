@@ -32,6 +32,12 @@ common:ci --disk_cache=~/.cache/bazel-disk
 # Keep the persisted CI disk cache bounded before GitHub snapshots it.
 common:ci --experimental_disk_cache_gc_max_size=2G
 
+# aspect lint uses --config=lint internally, so keep the same cache paths there.
+common:lint --repository_cache=~/.cache/bazel-repo
+common:lint --repo_contents_cache=~/.cache/bazel-repo/contents
+common:lint --disk_cache=~/.cache/bazel-disk
+common:lint --experimental_disk_cache_gc_max_size=2G
+
 
 
 common:lint --aspects=//tools/lint:linters.bzl%clang_tidy
