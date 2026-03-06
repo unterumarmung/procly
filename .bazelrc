@@ -29,6 +29,8 @@ common --workspace_status_command=githooks/check-config.sh
 common:ci --repository_cache=~/.cache/bazel-repo
 common:ci --repo_contents_cache=~/.cache/bazel-repo/contents
 common:ci --disk_cache=~/.cache/bazel-disk
+# Keep the persisted CI disk cache bounded before GitHub snapshots it.
+common:ci --experimental_disk_cache_gc_max_size=2G
 
 
 
