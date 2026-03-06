@@ -16,7 +16,6 @@ permissions:
 env:
   BAZEL_REPO_CACHE_PATH: ~/.cache/bazel-repo
   BAZEL_DISK_CACHE_PATH: ~/.cache/bazel-disk
-  BAZEL_CACHE_METADATA_HASH: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
 
 jobs:
   lint:
@@ -26,7 +25,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-bazel-ci
         with:
-          metadata-hash: ${{ env.BAZEL_CACHE_METADATA_HASH }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
           repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
@@ -54,7 +53,7 @@ jobs:
       - id: bazel-cache
         uses: ./.github/actions/setup-bazel-ci
         with:
-          metadata-hash: ${{ env.BAZEL_CACHE_METADATA_HASH }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
           repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
@@ -88,7 +87,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-bazel-ci
         with:
-          metadata-hash: ${{ env.BAZEL_CACHE_METADATA_HASH }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
           repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
@@ -109,7 +108,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-bazel-ci
         with:
-          metadata-hash: ${{ env.BAZEL_CACHE_METADATA_HASH }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
           repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
@@ -126,7 +125,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-bazel-ci
         with:
-          metadata-hash: ${{ env.BAZEL_CACHE_METADATA_HASH }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
           repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
           disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
