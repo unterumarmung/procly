@@ -25,6 +25,19 @@ common --downloader_config=tools/downloader.cfg
 common --@rules_python//python/config_settings:bootstrap_impl=script
 common --workspace_status_command=githooks/check-config.sh
 
+# CI cache locations are configured in the repo so all CI Bazel invocations share them.
+common:ci --repository_cache=~/.cache/bazel-repo
+common:ci --repo_contents_cache=~/.cache/bazel-repo/contents
+common:ci --disk_cache=~/.cache/bazel-disk
+# Keep the persisted CI disk cache bounded before GitHub snapshots it.
+common:ci --experimental_disk_cache_gc_max_size=2G
+
+# aspect lint uses --config=lint internally, so keep the same cache paths there.
+common:lint --repository_cache=~/.cache/bazel-repo
+common:lint --repo_contents_cache=~/.cache/bazel-repo/contents
+common:lint --disk_cache=~/.cache/bazel-disk
+common:lint --experimental_disk_cache_gc_max_size=2G
+
 
 
 common:lint --aspects=//tools/lint:linters.bzl%clang_tidy

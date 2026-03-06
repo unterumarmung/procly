@@ -13,22 +13,25 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  BAZEL_REPO_CACHE_PATH: ~/.cache/bazel-repo
+  BAZEL_DISK_CACHE_PATH: ~/.cache/bazel-disk
+
 jobs:
   lint:
     name: format + lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.18.0
+      - uses: ./.github/actions/setup-bazel-ci
         with:
-          bazelisk-cache: true
-          repository-cache: true
-          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
+          repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Prepare bazel-env
         run: |
-          bazel run //tools:bazel_env print-path >> "$GITHUB_PATH"
+          bazel run --config=ci //tools:bazel_env print-path >> "$GITHUB_PATH"
 
       - name: Format (must be clean)
         run: |
@@ -47,17 +50,31 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.18.0
+      - id: bazel-cache
+        uses: ./.github/actions/setup-bazel-ci
         with:
-          bazelisk-cache: true
-          repository-cache: true
-          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
+          repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Tests
         run: |
-          bazel test //... \
+          bazel test --config=ci //... \
             --test_output=errors --verbose_failures
+
+      - name: Save Bazel repository cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.repo-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          key: ${{ steps.bazel-cache.outputs.repo-primary-key }}
+
+      - name: Save Bazel disk cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.disk-cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BAZEL_DISK_CACHE_PATH }}
+          key: ${{ steps.bazel-cache.outputs.disk-primary-key }}
 
   test_debug:
     name: tests (dbg) - ${{ matrix.os }}
@@ -68,16 +85,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.18.0
+      - uses: ./.github/actions/setup-bazel-ci
         with:
-          bazelisk-cache: true
-          repository-cache: true
-          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
+          repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Tests (dbg)
         run: |
-          bazel test -c dbg //... \
+          bazel test --config=ci -c dbg //... \
             --test_output=errors --verbose_failures
 
   sanitizers:
@@ -90,16 +106,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.18.0
+      - uses: ./.github/actions/setup-bazel-ci
         with:
-          bazelisk-cache: true
-          repository-cache: true
-          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
+          repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Tests (${{ matrix.cfg }})
         run: |
-          bazel test --config=${{ matrix.cfg }} //... \
+          bazel test --config=ci --config=${{ matrix.cfg }} //... \
             --test_output=errors --verbose_failures
 
   docs_build:
@@ -108,15 +123,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: bazel-contrib/setup-bazel@0.18.0
+      - uses: ./.github/actions/setup-bazel-ci
         with:
-          bazelisk-cache: true
-          repository-cache: true
-          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          metadata-hash: ${{ hashFiles('MODULE.bazel', 'MODULE.bazel.lock', '.bazelversion', '.bazelrc', '**/BUILD', '**/BUILD.bazel', '**/*.bzl', 'tools/downloader.cfg', 'tools/patches/**') }}
+          repo-cache-path: ${{ env.BAZEL_REPO_CACHE_PATH }}
+          disk-cache-path: ${{ env.BAZEL_DISK_CACHE_PATH }}
 
       - name: Build Doxygen HTML
-        run: bazel build //docs:api_docs
+        run: bazel build --config=ci //docs:api_docs
 
       - name: Stage site
         run: |
