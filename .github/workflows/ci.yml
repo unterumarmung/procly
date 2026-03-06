@@ -39,7 +39,7 @@ jobs:
           git diff --exit-code
 
       - name: Lint (clang-tidy)
-        run: aspect lint --config=ci //...
+        run: aspect lint -- --config=ci //...
 
   test_release:
     name: tests - ${{ matrix.os }}
