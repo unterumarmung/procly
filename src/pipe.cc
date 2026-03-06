@@ -95,13 +95,47 @@ Result<std::size_t> write_without_sigpipe(int fd, const void* data, std::size_t 
   return make_errno_error("write");
 }
 
+Result<std::size_t> read_some_impl(int fd, void* data, std::size_t n) {
+  if (fd < 0) {
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "read"};
+  }
+  while (true) {
+    ssize_t rv = ::read(fd, data, n);
+    if (rv >= 0) {
+      return static_cast<std::size_t>(rv);
+    }
+    if (errno == EINTR) {
+      continue;
+    }
+    return make_errno_error("read");
+  }
+}
+
+Result<std::size_t> write_some_impl(int fd, const void* data, std::size_t n) {
+  if (fd < 0) {
+    return Error{.code = make_error_code(errc::invalid_stdio), .context = "write"};
+  }
+  return write_without_sigpipe(fd, data, n);
+}
+
 }  // namespace
 
-PipeReader::PipeReader(PipeReader&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+PipeReader::PipeReader(PipeReader&& other) noexcept {
+  auto use = other.concurrent_use_.enter("PipeReader");
+  (void)use;
+  fd_ = other.fd_;
+  other.fd_ = -1;
+}
 
 PipeReader& PipeReader::operator=(PipeReader&& other) noexcept {
   if (this != &other) {
-    close();
+    auto use = concurrent_use_.enter("PipeReader");
+    auto other_use = other.concurrent_use_.enter("PipeReader");
+    (void)use;
+    (void)other_use;
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
     fd_ = other.fd_;
     other.fd_ = -1;
   }
@@ -111,6 +145,8 @@ PipeReader& PipeReader::operator=(PipeReader&& other) noexcept {
 PipeReader::~PipeReader() { close(); }
 
 void PipeReader::close() noexcept {
+  auto use = concurrent_use_.enter("PipeReader");
+  (void)use;
   if (fd_ >= 0) {
     ::close(fd_);
     fd_ = -1;
@@ -124,22 +160,14 @@ Result<std::size_t> PipeReader::read_some(std::span<std::byte> buffer) const {
 #endif
 
 Result<std::size_t> PipeReader::read_some(void* data, std::size_t n) const {
-  if (fd_ < 0) {
-    return Error{.code = make_error_code(errc::invalid_stdio), .context = "read"};
-  }
-  while (true) {
-    ssize_t rv = ::read(fd_, data, n);
-    if (rv >= 0) {
-      return static_cast<std::size_t>(rv);
-    }
-    if (errno == EINTR) {
-      continue;
-    }
-    return make_errno_error("read");
-  }
+  auto use = concurrent_use_.enter("PipeReader");
+  (void)use;
+  return read_some_impl(fd_, data, n);
 }
 
 Result<std::string> PipeReader::read_all() const {
+  auto use = concurrent_use_.enter("PipeReader");
+  (void)use;
   if (fd_ < 0) {
     return Error{.code = make_error_code(errc::invalid_stdio), .context = "read"};
   }
@@ -147,7 +175,7 @@ Result<std::string> PipeReader::read_all() const {
   constexpr std::size_t kPipeBufferSize = 8192;
   std::array<char, kPipeBufferSize> buffer{};
   while (true) {
-    auto read_result = read_some(buffer.data(), buffer.size());
+    auto read_result = read_some_impl(fd_, buffer.data(), buffer.size());
     if (!read_result) {
       return read_result.error();
     }
@@ -160,11 +188,22 @@ Result<std::string> PipeReader::read_all() const {
   return out;
 }
 
-PipeWriter::PipeWriter(PipeWriter&& other) noexcept : fd_(other.fd_) { other.fd_ = -1; }
+PipeWriter::PipeWriter(PipeWriter&& other) noexcept {
+  auto use = other.concurrent_use_.enter("PipeWriter");
+  (void)use;
+  fd_ = other.fd_;
+  other.fd_ = -1;
+}
 
 PipeWriter& PipeWriter::operator=(PipeWriter&& other) noexcept {
   if (this != &other) {
-    close();
+    auto use = concurrent_use_.enter("PipeWriter");
+    auto other_use = other.concurrent_use_.enter("PipeWriter");
+    (void)use;
+    (void)other_use;
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
     fd_ = other.fd_;
     other.fd_ = -1;
   }
@@ -174,6 +213,8 @@ PipeWriter& PipeWriter::operator=(PipeWriter&& other) noexcept {
 PipeWriter::~PipeWriter() { close(); }
 
 void PipeWriter::close() noexcept {
+  auto use = concurrent_use_.enter("PipeWriter");
+  (void)use;
   if (fd_ >= 0) {
     ::close(fd_);
     fd_ = -1;
@@ -187,19 +228,20 @@ Result<std::size_t> PipeWriter::write_some(std::span<const std::byte> buffer) co
 #endif
 
 Result<std::size_t> PipeWriter::write_some(const void* data, std::size_t n) const {
-  if (fd_ < 0) {
-    return Error{.code = make_error_code(errc::invalid_stdio), .context = "write"};
-  }
-  return write_without_sigpipe(fd_, data, n);
+  auto use = concurrent_use_.enter("PipeWriter");
+  (void)use;
+  return write_some_impl(fd_, data, n);
 }
 
 Result<void> PipeWriter::write_all(std::string_view data) const {
+  auto use = concurrent_use_.enter("PipeWriter");
+  (void)use;
   if (fd_ < 0) {
     return Error{.code = make_error_code(errc::invalid_stdio), .context = "write"};
   }
   std::size_t offset = 0;
   while (offset < data.size()) {
-    auto write_result = write_some(data.data() + offset, data.size() - offset);
+    auto write_result = write_some_impl(fd_, data.data() + offset, data.size() - offset);
     if (!write_result) {
       return write_result.error();
     }

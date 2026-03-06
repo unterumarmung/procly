@@ -59,9 +59,31 @@ jobs:
           bazel test //... \
             --test_output=errors --verbose_failures
 
+  test_debug:
+    name: tests (dbg) - ${{ matrix.os }}
+    needs: [ test_release ]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: bazel-contrib/setup-bazel@0.18.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          disk-cache: ${{ runner.os }}-bazel-${{ github.workflow }}
+          cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Tests (dbg)
+        run: |
+          bazel test -c dbg //... \
+            --test_output=errors --verbose_failures
+
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
-    needs: [ test_release ]
+    needs: [ test_release, test_debug ]
     strategy:
       fail-fast: false
       matrix:

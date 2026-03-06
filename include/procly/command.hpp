@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "procly/child.hpp"
+#include "procly/internal/concurrent_use_guard.hpp"
 #include "procly/platform.hpp"
 #include "procly/result.hpp"
 #include "procly/status.hpp"
@@ -34,6 +35,9 @@ struct SpawnOptions {
 };
 
 /// @brief Builder for launching a child process.
+///
+/// Command builders are not safe for concurrent shared use from multiple
+/// threads.
 class Command {
  public:
   /// @brief Construct a command with argv[0]=program.
@@ -107,6 +111,8 @@ class Command {
   std::optional<Stdio> stderr_;
   /// @brief Spawn options for the command.
   SpawnOptions opts_{};
+  /// @brief Detect unsupported concurrent shared use of the builder.
+  mutable internal::ConcurrentUseGuard concurrent_use_;
 
   friend struct internal::CommandAccess;
 };

@@ -137,6 +137,7 @@ The core API exposes:
 - `.options(SpawnOptions)`
 - `.spawn()`, `.status()`, `.output()`
 - `.spawn_or_throw()`, `.status_or_throw()`, `.output_or_throw()`
+- `Command` builders are not thread-safe for shared use
 
 ### Stdio
 
@@ -145,6 +146,7 @@ The core API exposes:
 - `Stdio::piped()`
 - `Stdio::file(path)` (open mode optional)
 - `Stdio::fd(fd)` (POSIX)
+- `PipeReader` / `PipeWriter` handles are not thread-safe for shared use
 
 ### Child
 
@@ -153,6 +155,7 @@ The core API exposes:
 - `child.wait()`, `child.try_wait()`, `child.wait(WaitOptions)` (`WaitResult`)
 - `child.terminate()`, `child.kill()`
 - `Child` handles are not thread-safe
+- debug/test builds fail fast on concurrent shared use of the same live object
 
 ### Pipeline
 
@@ -160,6 +163,7 @@ The core API exposes:
 - `Pipeline::pipefail(true)` (last non-zero stage, matching shell `pipefail`)
 - `Pipeline::new_process_group(true)`
 - `Pipeline::spawn()`, `Pipeline::status()`, `Pipeline::output()`
+- `Pipeline` builders are not thread-safe for shared use
 - `PipelineChild` handles are not thread-safe
 
 ## Install
