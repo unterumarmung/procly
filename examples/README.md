@@ -25,8 +25,8 @@ bazel test //examples:all
 - `stdio_null`: Redirect output to the null device.
 - `stdio_append`: Append stdout to a file with `OpenMode::write_append`.
 - `merge_stderr`: Merge stderr into stdout with `SpawnOptions`.
-- `wait_timeout`: Use `WaitOptions` to enforce timeouts.
+- `wait_timeout`: Use `WaitOptions` and inspect `WaitResult` timeout/escalation metadata.
 - `try_wait`: Non-blocking wait with `Child::try_wait()`.
 - `pipeline_output`: Capture output from a pipeline.
-- `pipeline_pipefail`: Use pipefail aggregation for pipelines.
+- `pipeline_pipefail`: Use shell-style `pipefail` aggregation for pipelines.
 - `pipeline_pipes`: Pipe data into/out of a pipeline with `PipelineChild`.

@@ -5,12 +5,15 @@
 
 int main() {
   // clang-format off
-  const auto bad = procly::Command{"/bin/sh"}
-                       .arg("-c")
-                       .arg("exit 7");
-  const auto good = procly::Command{"/bin/cat"};
+  const auto first = procly::Command{"/bin/sh"}
+                         .arg("-c")
+                         .arg("exit 3");
+  const auto second = procly::Command{"/bin/sh"}
+                          .arg("-c")
+                          .arg("exit 1");
+  const auto third = procly::Command{"/bin/cat"};
 
-  const auto pipeline = (bad | good)
+  const auto pipeline = (first | second | third)
                             .pipefail(true);
   // clang-format on
 
@@ -22,8 +25,8 @@ int main() {
   }
 
   const auto& st = status.value();
-  if (!st.code().has_value() || st.code().value() != 7) {
-    std::cerr << "unexpected pipefail status\n";
+  if (!st.code().has_value() || st.code().value() != 1) {
+    std::cerr << "unexpected pipefail status: " << st.code().value_or(-1) << "\n";
     return 1;
   }
 

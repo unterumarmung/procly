@@ -21,12 +21,13 @@ int main() {
   options.timeout = std::chrono::milliseconds(10);
   options.kill_grace = std::chrono::milliseconds(10);
   auto wait_result = child_result->wait(options);
-  if (wait_result) {
-    std::cerr << "expected timeout but process exited\n";
+  if (!wait_result) {
+    std::cerr << "wait failed: " << wait_result.error().context << " "
+              << wait_result.error().code.message() << "\n";
     return 1;
   }
-  if (wait_result.error().code != procly::make_error_code(procly::errc::timeout)) {
-    std::cerr << "unexpected wait error: " << wait_result.error().code.message() << "\n";
+  if (!wait_result->timed_out || !wait_result->sent_terminate || wait_result->success()) {
+    std::cerr << "unexpected wait result\n";
     return 1;
   }
 

@@ -51,25 +51,39 @@ class FakeBackend final : public internal::Backend {
     return spawned;
   }
 
-  Result<ExitStatus> wait(internal::Spawned& spawned,
+  Result<WaitResult> wait(internal::Spawned& spawned,
                           std::optional<std::chrono::milliseconds> timeout,
                           std::chrono::milliseconds kill_grace) override {
+    if (spawned.terminal_result) {
+      return *spawned.terminal_result;
+    }
     wait_calls.push_back({spawned.pid, timeout, kill_grace});
     if (wait_error) {
       return *wait_error;
     }
-    return wait_result;
+    internal::cache_terminal_result(spawned, WaitResult{.status = wait_result});
+    return *spawned.terminal_result;
   }
 
   Result<std::optional<ExitStatus>> try_wait(internal::Spawned& spawned) override {
+    if (spawned.terminal_result) {
+      return std::optional<ExitStatus>(spawned.terminal_result->status);
+    }
     try_wait_pids.push_back(spawned.pid);
     if (try_wait_error) {
       return *try_wait_error;
+    }
+    if (try_wait_result.has_value()) {
+      internal::cache_terminal_result(spawned, WaitResult{.status = *try_wait_result});
+      return std::optional<ExitStatus>(spawned.terminal_result->status);
     }
     return try_wait_result;
   }
 
   Result<void> terminate(internal::Spawned& spawned) override {
+    if (spawned.terminal_result) {
+      return {};
+    }
     terminate_pids.push_back(spawned.pid);
     if (terminate_error) {
       return *terminate_error;
@@ -78,6 +92,9 @@ class FakeBackend final : public internal::Backend {
   }
 
   Result<void> kill(internal::Spawned& spawned) override {
+    if (spawned.terminal_result) {
+      return {};
+    }
     kill_pids.push_back(spawned.pid);
     if (kill_error) {
       return *kill_error;
@@ -86,6 +103,9 @@ class FakeBackend final : public internal::Backend {
   }
 
   Result<void> signal(internal::Spawned& spawned, int signo) override {
+    if (spawned.terminal_result) {
+      return {};
+    }
     signal_pids.push_back(spawned.pid);
     last_signal = signo;
     if (signal_error) {
@@ -166,9 +186,12 @@ class PipeLifecycleBackend final : public internal::Backend {
     return spawned;
   }
 
-  Result<ExitStatus> wait(internal::Spawned& spawned,
+  Result<WaitResult> wait(internal::Spawned& spawned,
                           std::optional<std::chrono::milliseconds> timeout,
                           std::chrono::milliseconds kill_grace) override {
+    if (spawned.terminal_result) {
+      return *spawned.terminal_result;
+    }
     wait_calls.push_back({spawned.pid, timeout, kill_grace});
     wait_observations.push_back({
         spawned.pid,
@@ -176,7 +199,8 @@ class PipeLifecycleBackend final : public internal::Backend {
         fd_is_open(spawned.stdout_fd),
         fd_is_open(spawned.stderr_fd),
     });
-    return ExitStatus::exited(0);
+    internal::cache_terminal_result(spawned, WaitResult{.status = ExitStatus::exited(0)});
+    return *spawned.terminal_result;
   }
 
   Result<std::optional<ExitStatus>> try_wait(internal::Spawned& spawned) override {
@@ -259,14 +283,36 @@ TEST(BackendInjectionTest, ScopedOverrideStacksAndRestores) {
   EXPECT_EQ(&internal::default_backend(), before);
 }
 
-TEST(BackendInjectionTest, ScopedOverrideVisibleAcrossThreads) {
+TEST(BackendInjectionTest, ScopedOverrideIsThreadLocal) {
   FakeBackend backend;
   internal::ScopedBackendOverride override_backend(backend);
 
   internal::Backend* observed = nullptr;
   std::thread worker([&] { observed = &internal::default_backend(); });
   worker.join();
-  EXPECT_EQ(observed, &backend);
+  EXPECT_NE(observed, &backend);
+}
+
+TEST(BackendInjectionTest, SpawnedChildCarriesBackendAcrossThreads) {
+  FakeBackend backend;
+  backend.wait_result = ExitStatus::exited(11);
+
+  Child child;
+  {
+    internal::ScopedBackendOverride override_backend(backend);
+    auto child_result = Command("echo").spawn();
+    ASSERT_TRUE(child_result.has_value());
+    child = std::move(child_result.value());
+  }
+
+  std::optional<Result<ExitStatus>> wait_result;
+  std::thread worker([&] { wait_result.emplace(child.wait()); });
+  worker.join();
+
+  ASSERT_TRUE(wait_result.has_value());
+  ASSERT_TRUE(wait_result->has_value());
+  EXPECT_EQ(wait_result->value().code().value_or(-1), 11);
+  ASSERT_EQ(backend.wait_calls.size(), 1u);
 }
 
 TEST(BackendInjectionTest, CommandStatusUsesInjectedBackend) {
@@ -303,11 +349,6 @@ TEST(BackendInjectionTest, ChildMethodsForwardToBackend) {
   spawned.pid = 4242;
   Child child = internal::ChildAccess::from_spawned(spawned);
 
-  auto wait_result = child.wait();
-  ASSERT_TRUE(wait_result.has_value());
-  EXPECT_EQ(backend.wait_calls.size(), 1u);
-  EXPECT_EQ(backend.wait_calls[0].pid, 4242);
-
   auto try_wait_result = child.try_wait();
   ASSERT_TRUE(try_wait_result.has_value());
   EXPECT_EQ(backend.try_wait_pids.size(), 1u);
@@ -328,6 +369,44 @@ TEST(BackendInjectionTest, ChildMethodsForwardToBackend) {
   EXPECT_EQ(backend.signal_pids.size(), 1u);
   EXPECT_EQ(backend.signal_pids[0], 4242);
   EXPECT_EQ(backend.last_signal, SIGUSR1);
+
+  auto wait_result = child.wait();
+  ASSERT_TRUE(wait_result.has_value());
+  EXPECT_EQ(backend.wait_calls.size(), 1u);
+  EXPECT_EQ(backend.wait_calls[0].pid, 4242);
+}
+
+TEST(BackendInjectionTest, ChildCachesWaitResultAndSuppressesPostReapSignals) {
+  FakeBackend backend;
+  backend.wait_result = ExitStatus::exited(12);
+  internal::ScopedBackendOverride override_backend(backend);
+
+  internal::Spawned spawned;
+  spawned.pid = 1212;
+  Child child = internal::ChildAccess::from_spawned(spawned);
+
+  auto first_wait = child.wait();
+  ASSERT_TRUE(first_wait.has_value());
+  EXPECT_EQ(first_wait->code().value_or(-1), 12);
+
+  auto second_wait = child.wait();
+  ASSERT_TRUE(second_wait.has_value());
+  EXPECT_EQ(second_wait->code().value_or(-1), 12);
+
+  auto try_wait_result = child.try_wait();
+  ASSERT_TRUE(try_wait_result.has_value());
+  ASSERT_TRUE(try_wait_result->has_value());
+  EXPECT_EQ(try_wait_result->value().code().value_or(-1), 12);
+
+  EXPECT_TRUE(child.terminate().has_value());
+  EXPECT_TRUE(child.kill().has_value());
+  EXPECT_TRUE(child.signal(SIGTERM).has_value());
+
+  EXPECT_EQ(backend.wait_calls.size(), 1u);
+  EXPECT_EQ(backend.try_wait_pids.size(), 0u);
+  EXPECT_TRUE(backend.terminate_pids.empty());
+  EXPECT_TRUE(backend.kill_pids.empty());
+  EXPECT_TRUE(backend.signal_pids.empty());
 }
 
 TEST(BackendInjectionTest, ChildPropagatesBackendErrors) {
@@ -458,6 +537,30 @@ TEST(BackendInjectionTest, PipelineTerminateAndKillPerStageWithoutGroup) {
   auto kill_result = child_result->kill();
   ASSERT_TRUE(kill_result.has_value());
   EXPECT_EQ(backend.kill_pids.size(), 3u);
+}
+
+TEST(BackendInjectionTest, PipelineCachesWaitResultsAndSuppressesPostReapSignals) {
+  FakeBackend backend;
+  backend.wait_result = ExitStatus::exited(4);
+  internal::ScopedBackendOverride override_backend(backend);
+
+  auto child_result = (Command("echo") | Command("cat")).spawn();
+  ASSERT_TRUE(child_result.has_value());
+
+  auto first_wait = child_result->wait();
+  ASSERT_TRUE(first_wait.has_value());
+  ASSERT_EQ(first_wait->stages.size(), 2u);
+
+  auto second_wait = child_result->wait();
+  ASSERT_TRUE(second_wait.has_value());
+  ASSERT_EQ(second_wait->stages.size(), 2u);
+
+  EXPECT_TRUE(child_result->terminate().has_value());
+  EXPECT_TRUE(child_result->kill().has_value());
+
+  EXPECT_EQ(backend.wait_calls.size(), 2u);
+  EXPECT_TRUE(backend.terminate_pids.empty());
+  EXPECT_TRUE(backend.kill_pids.empty());
 }
 
 TEST(BackendInjectionTest, CommandOutputUsesInjectedBackend) {

@@ -272,6 +272,18 @@ std::optional<pid_t> read_pid_file(const std::filesystem::path& path) {
   return static_cast<pid_t>(value);
 }
 
+bool wait_for_file(const std::filesystem::path& path, std::chrono::milliseconds timeout) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::error_code ec;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (std::filesystem::exists(path, ec)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
 pid_t wait_for_pid_file(const std::filesystem::path& path, std::chrono::milliseconds timeout) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -560,8 +572,11 @@ TEST(CommandIntegrationTest, WaitTimeout) {
   WaitOptions opts;
   opts.timeout = std::chrono::milliseconds(10);
   auto wait_result = child_result->wait(opts);
-  ASSERT_FALSE(wait_result.has_value());
-  EXPECT_EQ(wait_result.error().code, make_error_code(errc::timeout));
+  ASSERT_TRUE(wait_result.has_value())
+      << wait_result.error().context << " " << wait_result.error().code.message();
+  EXPECT_TRUE(wait_result->timed_out);
+  EXPECT_TRUE(wait_result->sent_terminate);
+  EXPECT_FALSE(wait_result->success());
 }
 
 #if PROCLY_PLATFORM_POSIX && defined(PROCLY_FORCE_FORK)
@@ -736,6 +751,39 @@ TEST(CommandIntegrationTest, StdinPipeRoundTrip) {
   EXPECT_TRUE(wait_result->success());
 }
 
+TEST(CommandIntegrationTest, BrokenPipeWriteReturnsError) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path ready_path = unique_temp_path("stdin_closed");
+  std::error_code remove_ec;
+  std::filesystem::remove(ready_path, remove_ec);
+
+  Command cmd(helper);
+  cmd.arg("--close-stdin");
+  cmd.arg("--ready-file").arg(ready_path.string());
+  cmd.arg("--sleep-ms").arg("50");
+  cmd.stdin(Stdio::piped());
+
+  auto child_result = cmd.spawn();
+  ASSERT_TRUE(child_result.has_value())
+      << child_result.error().context << " " << child_result.error().code.message();
+
+  auto stdin_pipe = child_result->take_stdin();
+  ASSERT_TRUE(stdin_pipe.has_value());
+  ASSERT_TRUE(wait_for_file(ready_path, std::chrono::milliseconds(500)));
+
+  auto write_result = stdin_pipe->write_all("payload");
+  ASSERT_FALSE(write_result.has_value());
+  EXPECT_EQ(write_result.error().code.category(), std::system_category());
+  EXPECT_EQ(write_result.error().code.value(), EPIPE);
+
+  auto wait_result = child_result->wait();
+  ASSERT_TRUE(wait_result.has_value())
+      << wait_result.error().context << " " << wait_result.error().code.message();
+  std::filesystem::remove(ready_path, remove_ec);
+}
+
 TEST(CommandIntegrationTest, MergeStderrIntoStdoutToFile) {
   std::string helper = helper_path();
   ASSERT_FALSE(helper.empty());
@@ -805,6 +853,27 @@ TEST(PipelineIntegrationTest, PipefailReportsFirstFailure) {
   EXPECT_EQ(status->code().value(), 5);
 }
 
+TEST(PipelineIntegrationTest, PipefailReportsLastFailure) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  Command first(helper);
+  first.arg("--exit-code").arg("3");
+
+  Command second(helper);
+  second.arg("--exit-code").arg("7");
+
+  Command third(helper);
+  third.arg("--exit-code").arg("0");
+
+  Pipeline pipeline = first | second | third;
+  pipeline.pipefail(true);
+  auto status = pipeline.status();
+  ASSERT_TRUE(status.has_value()) << status.error().context << " " << status.error().code.message();
+  ASSERT_TRUE(status->code().has_value());
+  EXPECT_EQ(status->code().value(), 7);
+}
+
 TEST(PipelineIntegrationTest, DefaultPipefailUsesLastStage) {
   std::string helper = helper_path();
   ASSERT_FALSE(helper.empty());
@@ -835,6 +904,31 @@ TEST(PipelineIntegrationTest, OutputCapturesLastStageStderr) {
   auto output = pipeline.output();
   ASSERT_TRUE(output.has_value()) << output.error().context << " " << output.error().code.message();
   EXPECT_EQ(output->stderr_data.size(), 3u);
+}
+
+TEST(PipelineIntegrationTest, InvalidLaterStageDoesNotSpawnEarlierStages) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path pid_path = unique_temp_path("pipeline_prevalidation");
+  std::error_code remove_ec;
+  std::filesystem::remove(pid_path, remove_ec);
+
+  Command first(helper);
+  first.arg("--pid-file").arg(pid_path.string());
+  first.arg("--sleep-ms").arg("500");
+
+  Command second(helper);
+  second.stdout(Stdio::file(unique_temp_path("invalid_stdout"), OpenMode::read));
+
+  Pipeline pipeline = first | second;
+  auto child_result = pipeline.spawn();
+  ASSERT_FALSE(child_result.has_value());
+  EXPECT_EQ(child_result.error().code, make_error_code(errc::invalid_stdio));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  EXPECT_FALSE(std::filesystem::exists(pid_path));
+  std::filesystem::remove(pid_path, remove_ec);
 }
 
 TEST(CommandIntegrationTest, OutputLargePayloads) {

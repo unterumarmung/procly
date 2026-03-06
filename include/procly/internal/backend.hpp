@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "procly/command.hpp"
@@ -13,6 +14,8 @@
 #include "procly/stdio.hpp"
 
 namespace procly::internal {
+
+class Backend;
 
 struct StdioSpec {
   enum class Kind : std::uint8_t { inherit, null, piped, fd, file, dup_stdout };
@@ -46,13 +49,15 @@ struct Spawned {
   std::optional<int> stdout_fd;
   std::optional<int> stderr_fd;
   bool new_process_group = false;
+  Backend* backend = nullptr;
+  std::optional<WaitResult> terminal_result;
 };
 
 class Backend {
  public:
   virtual ~Backend() = default;
   virtual Result<Spawned> spawn(const SpawnSpec& spec) = 0;
-  virtual Result<ExitStatus> wait(Spawned& spawned,
+  virtual Result<WaitResult> wait(Spawned& spawned,
                                   std::optional<std::chrono::milliseconds> timeout,
                                   std::chrono::milliseconds kill_grace) = 0;
   virtual Result<std::optional<ExitStatus>> try_wait(Spawned& spawned) = 0;
@@ -73,5 +78,20 @@ class ScopedBackendOverride {
 };
 
 Backend& default_backend();
+
+inline Backend& backend_for(Spawned& spawned) {
+  return spawned.backend != nullptr ? *spawned.backend : default_backend();
+}
+
+inline const Backend& backend_for(const Spawned& spawned) {
+  return spawned.backend != nullptr ? *spawned.backend : default_backend();
+}
+
+inline void cache_terminal_result(Spawned& spawned, WaitResult result) {
+  spawned.terminal_result = result;
+  spawned.pid = -1;
+  spawned.pgid.reset();
+  spawned.new_process_group = false;
+}
 
 }  // namespace procly::internal

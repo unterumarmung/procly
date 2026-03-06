@@ -5,7 +5,6 @@ cc_test(
     srcs = ["command_stress_test.cc"],
     data = ["//tests/helpers:procly_child"],
     tags = [
-        "manual",
         "stress",
     ],
     deps = [

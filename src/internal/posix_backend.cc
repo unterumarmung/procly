@@ -5,7 +5,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cstdlib>
@@ -231,15 +230,29 @@ ExitStatus to_exit_status(int status) {
   return ExitStatus::other(static_cast<std::uint32_t>(status));
 }
 
-Result<ExitStatus> wait_pid(pid_t pid, int options) {
+Result<ExitStatus> wait_pid_blocking(pid_t pid) {
   int status = 0;
   while (true) {
-    pid_t rv = ::waitpid(pid, &status, options);
+    pid_t rv = ::waitpid(pid, &status, 0);
     if (rv == pid) {
       return to_exit_status(status);
     }
+    if (errno == EINTR) {
+      continue;
+    }
+    return make_errno_error("waitpid");
+  }
+}
+
+Result<std::optional<ExitStatus>> try_wait_pid(pid_t pid) {
+  int status = 0;
+  while (true) {
+    pid_t rv = ::waitpid(pid, &status, WNOHANG);
+    if (rv == pid) {
+      return std::optional<ExitStatus>(to_exit_status(status));
+    }
     if (rv == 0) {
-      return ExitStatus::other(0);
+      return std::optional<ExitStatus>();
     }
     if (errno == EINTR) {
       continue;
@@ -249,7 +262,13 @@ Result<ExitStatus> wait_pid(pid_t pid, int options) {
 }
 
 Result<void> send_signal(const Spawned& spawned, int signo) {
+  if (spawned.terminal_result.has_value()) {
+    return {};
+  }
   int target = spawned.pid;
+  if (target <= 0) {
+    return Error{.code = make_error_code(errc::kill_failed), .context = "kill"};
+  }
   if (spawned.new_process_group && spawned.pgid) {
     target = -(*spawned.pgid);
   }
@@ -755,31 +774,44 @@ class PosixBackend final : public Backend {
     return spawned;
   }
 
-  Result<ExitStatus> wait(Spawned& spawned, std::optional<std::chrono::milliseconds> timeout,
+  Result<WaitResult> wait(Spawned& spawned, std::optional<std::chrono::milliseconds> timeout,
                           std::chrono::milliseconds kill_grace) override {
+    if (spawned.terminal_result) {
+      return *spawned.terminal_result;
+    }
+
     WaitOps ops;
     ops.try_wait = [&]() { return try_wait(spawned); };
-    ops.wait_blocking = [&]() { return wait_pid(spawned.pid, 0); };
+    ops.wait_blocking = [&]() { return wait_pid_blocking(spawned.pid); };
     ops.terminate = [&]() { return terminate(spawned); };
     ops.kill = [&]() { return kill(spawned); };
-    return wait_with_timeout(ops, default_clock(), timeout, kill_grace);
+    auto wait_result = wait_with_timeout(ops, default_clock(), timeout, kill_grace);
+    if (!wait_result) {
+      return wait_result.error();
+    }
+    const WaitResult terminal = wait_result.value();
+    cache_terminal_result(spawned, terminal);
+    return terminal;
   }
 
   Result<std::optional<ExitStatus>> try_wait(Spawned& spawned) override {
-    int status = 0;
-    while (true) {
-      pid_t rv = ::waitpid(spawned.pid, &status, WNOHANG);
-      if (rv == spawned.pid) {
-        return std::optional<ExitStatus>(to_exit_status(status));
-      }
-      if (rv == 0) {
-        return std::optional<ExitStatus>();
-      }
-      if (errno == EINTR) {
-        continue;
-      }
-      return make_errno_error("waitpid");
+    if (spawned.terminal_result) {
+      return std::optional<ExitStatus>(spawned.terminal_result->status);
     }
+    if (spawned.pid <= 0) {
+      return Error{.code = make_error_code(errc::wait_failed), .context = "waitpid"};
+    }
+    auto status = try_wait_pid(spawned.pid);
+    if (!status) {
+      return status.error();
+    }
+    const std::optional<ExitStatus>& maybe_status = status.value();
+    if (maybe_status.has_value()) {
+      const ExitStatus terminal = *maybe_status;
+      cache_terminal_result(spawned, WaitResult{.status = terminal});
+      return std::optional<ExitStatus>(terminal);
+    }
+    return std::optional<ExitStatus>();
   }
 
   Result<void> terminate(Spawned& spawned) override { return send_signal(spawned, SIGTERM); }
@@ -793,17 +825,18 @@ class PosixBackend final : public Backend {
 
 namespace {
 
-std::atomic<Backend*> g_backend_override{nullptr};
+thread_local Backend* g_backend_override = nullptr;
 
 }  // namespace
 
-ScopedBackendOverride::ScopedBackendOverride(Backend& backend)
-    : previous_(g_backend_override.exchange(&backend)) {}
+ScopedBackendOverride::ScopedBackendOverride(Backend& backend) : previous_(g_backend_override) {
+  g_backend_override = &backend;
+}
 
-ScopedBackendOverride::~ScopedBackendOverride() { g_backend_override.store(previous_); }
+ScopedBackendOverride::~ScopedBackendOverride() { g_backend_override = previous_; }
 
 Backend& default_backend() {
-  if (auto* override_backend = g_backend_override.load()) {
+  if (auto* override_backend = g_backend_override) {
     return *override_backend;
   }
   static PosixBackend backend;

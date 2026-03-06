@@ -8,3 +8,5 @@ user.bazelrc
 # Bazelisk metadata
 .bazelisk
 
+# macOS Finder metadata
+.DS_Store

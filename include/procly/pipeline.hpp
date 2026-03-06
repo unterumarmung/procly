@@ -19,7 +19,10 @@ struct PipelineAccess;
 struct PipelineStatus {
   /// @brief Exit status for each stage, in order.
   std::vector<ExitStatus> stages;
-  /// @brief Aggregate status using pipefail policy.
+  /// @brief Aggregate status using pipeline pipefail policy.
+  ///
+  /// When pipefail is enabled, this is the last non-success stage, matching
+  /// shell pipefail semantics.
   ExitStatus aggregate;
 };
 
@@ -33,6 +36,8 @@ class Pipeline {
   Pipeline() = default;
 
   /// @brief Enable pipefail behavior.
+  ///
+  /// When enabled, the pipeline status becomes the last non-success stage.
   Pipeline& pipefail(bool enabled = true);
   /// @brief Spawn pipeline in a new process group.
   Pipeline& new_process_group(bool enabled = true);
@@ -79,13 +84,15 @@ Pipeline operator|(Command left, Command right);
 Pipeline operator|(Pipeline left, Command right);
 
 /// @brief Running pipeline handle.
+///
+/// PipelineChild handles are not safe for concurrent use from multiple threads.
 class PipelineChild {
  public:
   /// @brief Opaque implementation type.
   struct Impl;
 
   /// @brief Construct an empty pipeline handle.
-  PipelineChild() = default;
+  PipelineChild();
   /// @brief Move-construct a pipeline handle.
   PipelineChild(PipelineChild&& other) noexcept;
   /// @brief Move-assign a pipeline handle.

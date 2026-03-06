@@ -25,6 +25,7 @@ struct Child::Impl {
   std::optional<PipeReader> stderr_pipe;
 };
 
+Child::Child() = default;
 Child::Child(Child&& other) noexcept = default;
 Child& Child::operator=(Child&& other) noexcept = default;
 Child::~Child() = default;
@@ -77,43 +78,48 @@ Result<ExitStatus> Child::wait() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
-  return internal::default_backend().wait(impl_->spawned_, std::nullopt,
-                                          std::chrono::milliseconds(0));
+  auto wait_result = internal::backend_for(impl_->spawned_)
+                         .wait(impl_->spawned_, std::nullopt, std::chrono::milliseconds(0));
+  if (!wait_result) {
+    return wait_result.error();
+  }
+  return wait_result->status;
 }
 
 Result<std::optional<ExitStatus>> Child::try_wait() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::wait_failed), .context = "try_wait"};
   }
-  return internal::default_backend().try_wait(impl_->spawned_);
+  return internal::backend_for(impl_->spawned_).try_wait(impl_->spawned_);
 }
 
-Result<ExitStatus> Child::wait(WaitOptions options) {
+Result<WaitResult> Child::wait(WaitOptions options) {
   if (!impl_) {
     return Error{.code = make_error_code(errc::wait_failed), .context = "wait"};
   }
-  return internal::default_backend().wait(impl_->spawned_, options.timeout, options.kill_grace);
+  return internal::backend_for(impl_->spawned_)
+      .wait(impl_->spawned_, options.timeout, options.kill_grace);
 }
 
 Result<void> Child::terminate() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::kill_failed), .context = "terminate"};
   }
-  return internal::default_backend().terminate(impl_->spawned_);
+  return internal::backend_for(impl_->spawned_).terminate(impl_->spawned_);
 }
 
 Result<void> Child::kill() {
   if (!impl_) {
     return Error{.code = make_error_code(errc::kill_failed), .context = "kill"};
   }
-  return internal::default_backend().kill(impl_->spawned_);
+  return internal::backend_for(impl_->spawned_).kill(impl_->spawned_);
 }
 
 Result<void> Child::signal(int signo) {
   if (!impl_) {
     return Error{.code = make_error_code(errc::kill_failed), .context = "signal"};
   }
-  return internal::default_backend().signal(impl_->spawned_, signo);
+  return internal::backend_for(impl_->spawned_).signal(impl_->spawned_, signo);
 }
 
 }  // namespace procly

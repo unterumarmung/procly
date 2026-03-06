@@ -37,9 +37,12 @@ struct Options {
   std::optional<std::string> write_open_fds;
   std::optional<std::string> grandchild_write_open_fds;
   std::optional<std::string> grandchild_pid_file;
+  std::optional<std::string> pid_file;
+  std::optional<std::string> ready_file;
   bool echo_stdin = false;
   bool consume_stdin = false;
   bool spawn_grandchild = false;
+  bool close_stdin = false;
   std::optional<std::string> print_env;
   bool print_cwd = false;
 };
@@ -109,6 +112,14 @@ bool parse_args(int argc, char* argv[], Options* options) {  // NOLINT(modernize
       options->grandchild_pid_file = argv[++i];
       continue;
     }
+    if (arg == "--pid-file" && i + 1 < argc) {
+      options->pid_file = argv[++i];
+      continue;
+    }
+    if (arg == "--ready-file" && i + 1 < argc) {
+      options->ready_file = argv[++i];
+      continue;
+    }
     if (arg == "--write-open-fds" && i + 1 < argc) {
       options->write_open_fds = argv[++i];
       continue;
@@ -127,6 +138,10 @@ bool parse_args(int argc, char* argv[], Options* options) {  // NOLINT(modernize
     }
     if (arg == "--spawn-grandchild") {
       options->spawn_grandchild = true;
+      continue;
+    }
+    if (arg == "--close-stdin") {
+      options->close_stdin = true;
       continue;
     }
     if (arg == "--print-env" && i + 1 < argc) {
@@ -210,6 +225,14 @@ void write_pid_file(const std::string& path, pid_t pid) {
   }
 }
 
+void touch_file(const std::string& path) {
+  std::ofstream file(path);
+  if (file) {
+    file << "ready";
+    file.flush();
+  }
+}
+
 std::vector<int> list_open_fds() {
 #if PROCLY_PLATFORM_LINUX
   std::vector<int> fds;
@@ -275,6 +298,18 @@ int main(int argc, char* argv[]) {
   if (!parse_args(argc, argv, &options)) {
     std::cerr << "invalid args" << '\n';
     return 2;
+  }
+
+  if (options.pid_file) {
+    write_pid_file(*options.pid_file, ::getpid());
+  }
+
+  if (options.close_stdin) {
+    ::close(STDIN_FILENO);
+  }
+
+  if (options.ready_file) {
+    touch_file(*options.ready_file);
   }
 
   if (options.sleep_ms) {
