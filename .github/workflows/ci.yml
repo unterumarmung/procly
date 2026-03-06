@@ -61,7 +61,6 @@ jobs:
 
   test_debug:
     name: tests (dbg) - ${{ matrix.os }}
-    needs: [ test_release ]
     strategy:
       fail-fast: false
       matrix:
@@ -83,7 +82,6 @@ jobs:
 
   sanitizers:
     name: tests (${{ matrix.cfg }}) - ${{ matrix.os }}
-    needs: [ test_release, test_debug ]
     strategy:
       fail-fast: false
       matrix:
@@ -106,7 +104,7 @@ jobs:
 
   docs_build:
     name: docs (build)
-    needs: [ test_release, sanitizers ]
+    needs: [ test_release, test_debug, sanitizers ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
