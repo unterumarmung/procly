@@ -276,7 +276,8 @@ See `docs/README.md` for more details.
 ## Platform notes
 
 - Linux: ✅ spawn, capture, pipelines
-- macOS: ✅ spawn, capture, pipelines
+- macOS (Apple Silicon): ✅ spawn, capture, pipelines
+- macOS (Intel): ⏳ unsupported on LLVM 22.1 toolchain
 - Windows: ⏳ planned
 
 ## Roadmap

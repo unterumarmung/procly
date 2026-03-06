@@ -25,7 +25,7 @@
 #define PROCLY_PLATFORM_MACOS 0
 #endif
 
-#if defined(__linux__)
+#ifdef __linux__
 /// @brief True when building for Linux.
 #define PROCLY_PLATFORM_LINUX 1
 #else

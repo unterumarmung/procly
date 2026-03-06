@@ -184,7 +184,7 @@ void reap_child_after_exec_failure(pid_t pid) {
 
 Result<int> open_null(bool read_only) {
   int flags = read_only ? O_RDONLY : O_WRONLY;
-#if defined(O_CLOEXEC)
+#ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
 #endif
   int fd = ::open("/dev/null", flags);
@@ -211,7 +211,7 @@ int open_flags_for(OpenMode mode) {
 Result<int> open_file(const std::filesystem::path& path, OpenMode mode,
                       std::optional<FilePerms> perms) {
   int flags = open_flags_for(mode);
-#if defined(O_CLOEXEC)
+#ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
 #endif
   constexpr int kFileMode = 0666;
@@ -473,7 +473,7 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
     }
   }
 
-#if !defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+#ifndef POSIX_SPAWN_CLOEXEC_DEFAULT
   auto close_result = add_close_actions_for_inherited_fds(&state.actions, &closed_fds);
   if (!close_result) {
     return cleanup_and_return(close_result.error());

@@ -24,10 +24,17 @@ if ! /usr/bin/readelf -d "$BIN" 2>/dev/null | grep -q 'libclang_rt\.ubsan_standa
   exec "$BIN" "$@"
 fi
 
-llvm_lib_dir="$(resolve_runfile "llvm_toolchain_llvm/lib/clang/20/lib" || true)"
-if [[ -z "$llvm_lib_dir" ]]; then
-  llvm_lib_dir="$(resolve_runfile "external/llvm_toolchain_llvm/lib/clang/20/lib" || true)"
+CLANG="$(resolve_runfile "llvm_toolchain_llvm/bin/clang" || true)"
+if [[ -z "$CLANG" ]]; then
+  CLANG="$(resolve_runfile "external/llvm_toolchain_llvm/bin/clang" || true)"
 fi
+if [[ -z "$CLANG" ]]; then
+  echo "failed to locate llvm clang binary in runfiles" >&2
+  exit 1
+fi
+
+LLVM_PREFIX="$(cd "$(dirname "$CLANG")/.." && pwd)"
+llvm_lib_dir="$(/usr/bin/find "$LLVM_PREFIX/lib/clang" -mindepth 2 -maxdepth 2 -type d -name lib -print -quit 2>/dev/null)"
 if [[ -z "$llvm_lib_dir" ]]; then
   echo "failed to locate llvm toolchain runtime in runfiles" >&2
   exit 1

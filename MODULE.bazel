@@ -77,12 +77,31 @@ bazel_dep(name = "toolchains_llvm", version = "1.6.0")
 # Hermetic C++ toolchain, to relieve the dependency on a locally installed CC etc.
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
-    # NB: llvm doesn't release for all platforms on every patch release
-    llvm_versions = {
-        "": "20.1.4",
-        "darwin-aarch64": "20.1.4",
-        "darwin-x86_64": "20.1.4",
+    extra_llvm_distributions = {
+        "LLVM-22.1.0-Linux-ARM64.tar.xz": "e3b4205fe45d5561dec9d46465873a79c26b25b028b310515b38c34f668c6aec",
+        "LLVM-22.1.0-Linux-X64.tar.xz": "8d662e425e46c48b45f5f970770b5e37f323607c8c2cbc371593fc9c4ba1e7b3",
+        "LLVM-22.1.0-macOS-ARM64.tar.xz": "cd5e615f4dab23d0239359cd343202c5f6ceeaf072c245a3c685d73afac09646",
     },
+    link_flags = {
+        "darwin-aarch64": [
+            "--target=aarch64-apple-macosx",
+            "-no-canonical-prefixes",
+            "-fuse-ld=lld",
+            "--ld-path=ld64.lld",
+            "-lm",
+            "-headerpad_max_install_names",
+            "-fobjc-link-runtime",
+            "-L{toolchain_path_prefix}lib",
+            "-lc++",
+            "-lc++abi",
+            "-lunwind",
+        ],
+    },
+    llvm_versions = {
+        "": "22.1.0",
+        "darwin-aarch64": "22.1.0",
+    },
+    # NB: llvm doesn't release for all platforms on every patch release
 )
 use_repo(llvm, "llvm_toolchain", "llvm_toolchain_llvm")
 
