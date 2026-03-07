@@ -72,11 +72,13 @@ PROCLY_PUBLIC_VISIBILITY = ["//visibility:public"]
 cc_import(
     name = "llvm_libcxx_archive",
     static_library = "@llvm_toolchain_llvm//:lib/libc++.a",
+    target_compatible_with = ["@platforms//os:macos"],
 )
 
 cc_library(
     name = "llvm_macos_libcxx_compat",
     deps = [":llvm_libcxx_archive"],
+    target_compatible_with = ["@platforms//os:macos"],
 )
 
 cc_library(
