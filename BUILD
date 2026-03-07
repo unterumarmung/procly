@@ -1,7 +1,7 @@
 """Targets in the repository root"""
 
 load("@gazelle//:def.bzl", "gazelle")
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
 
 exports_files(
     [
@@ -69,12 +69,26 @@ PROCLY_INCLUDES = ["include"]
 
 PROCLY_PUBLIC_VISIBILITY = ["//visibility:public"]
 
+cc_import(
+    name = "llvm_libcxx_archive",
+    static_library = "@llvm_toolchain_llvm//:lib/libc++.a",
+)
+
+cc_library(
+    name = "llvm_macos_libcxx_compat",
+    deps = [":llvm_libcxx_archive"],
+)
+
 cc_library(
     name = "procly",
     srcs = PROCLY_SRCS,
     hdrs = PROCLY_HDRS,
     includes = PROCLY_INCLUDES,
     visibility = PROCLY_PUBLIC_VISIBILITY,
+    deps = select({
+        "@platforms//os:macos": [":llvm_macos_libcxx_compat"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(
@@ -84,4 +98,8 @@ cc_library(
     defines = ["PROCLY_FORCE_FORK"],
     includes = PROCLY_INCLUDES,
     visibility = PROCLY_PUBLIC_VISIBILITY,
+    deps = select({
+        "@platforms//os:macos": [":llvm_macos_libcxx_compat"],
+        "//conditions:default": [],
+    }),
 )
