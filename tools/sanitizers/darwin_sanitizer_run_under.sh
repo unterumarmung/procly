@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Wrapper for Bazel --run_under on macOS to make sanitizer runtimes available at
-# test execution time without hardcoding Bazel's external/ layout or clang version.
+# Wrapper for Bazel --run_under on macOS to make LLVM-managed runtimes available
+# at test execution time without hardcoding Bazel's external/ layout or clang version.
 #
 # High level flow:
-# 1) Check whether the test binary references libclang_rt.*_osx_dynamic.dylib.
+# 1) Check whether the test binary references sanitizer or bundled libc++ dylibs.
 # 2) If not, just exec the test directly (no overhead).
 # 3) If yes, locate the toolchain's clang distribution via runfiles.
 # 4) Copy the needed runtime dylibs next to a temp copy of the test binary.
@@ -27,15 +27,21 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/sanitizer_runfiles_resolve.sh"
 
-# Inspect the binary's DT_NEEDED entries and pick only sanitizer dylibs.
-NEEDED="$(
+# Inspect the binary's load commands and pick the LLVM-managed dylibs we may need to stage.
+SANITIZER_NEEDED="$(
   /usr/bin/otool -L "$BIN" \
     | awk '{print $1}' \
     | grep -E 'libclang_rt\..*_osx_dynamic\.dylib$' \
     || true
 )"
-# Fast path: no sanitizer runtime referenced -> no wrapper needed.
-if [[ -z "$NEEDED" ]]; then
+CXX_RUNTIME_NEEDED="$(
+  /usr/bin/otool -L "$BIN" \
+    | awk '{print $1}' \
+    | grep -E '@rpath/lib(c\+\+|c\+\+abi|unwind)\.1\.dylib$' \
+    || true
+)"
+# Fast path: no LLVM-managed runtime referenced -> no wrapper needed.
+if [[ -z "$SANITIZER_NEEDED" && -z "$CXX_RUNTIME_NEEDED" ]]; then
   exec "$BIN" "$@"
 fi
 
@@ -52,6 +58,7 @@ if [[ -z "$RUNTIME_DIR" ]]; then
   echo "Could not locate runtime dir under: $LLVM_PREFIX/lib/clang/*/lib/darwin" >&2
   exit 1
 fi
+CXX_RUNTIME_DIR="$LLVM_PREFIX/lib"
 
 # Stage binaries + sanitizer runtimes in an isolated temp directory.
 TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/bazel_san.XXXXXX")"
@@ -62,24 +69,26 @@ BIN_BASE="$(basename "$BIN")"
 cp -f "$BIN" "$TMPDIR/$BIN_BASE"
 chmod +w "$TMPDIR/$BIN_BASE" || true
 
-# Copy the exact sanitizer dylibs referenced by a binary into TMPDIR.
+# Copy the exact dylibs referenced by a binary into TMPDIR.
 copy_needed_libs() {
   local list="$1"
+  local src_dir="$2"
   local dep=""
   for dep in $list; do
     local lib=""
     lib="$(basename "$dep")"
-    if [[ -f "$RUNTIME_DIR/$lib" ]]; then
-      cp -f "$RUNTIME_DIR/$lib" "$TMPDIR/$lib"
+    if [[ -f "$src_dir/$lib" ]]; then
+      cp -f "$src_dir/$lib" "$TMPDIR/$lib"
     else
-      echo "Missing sanitizer runtime: $RUNTIME_DIR/$lib" >&2
+      echo "Missing runtime dylib: $src_dir/$lib" >&2
       exit 1
     fi
   done
 }
 
-# Stage sanitizer runtimes for the main test binary.
-copy_needed_libs "$NEEDED"
+# Stage LLVM-managed runtimes for the main test binary.
+copy_needed_libs "$SANITIZER_NEEDED" "$RUNTIME_DIR"
+copy_needed_libs "$CXX_RUNTIME_NEEDED" "$CXX_RUNTIME_DIR"
 
 # Some tests spawn a helper binary. Stage it too and point tests at it.
 HELPER=""
@@ -91,17 +100,24 @@ for candidate in "tests/helpers/procly_child" "procly/tests/helpers/procly_child
 done
 
 if [[ -n "$HELPER" && -f "$HELPER" ]]; then
-  # Copy helper and its sanitizer deps next to the main test binary.
+  # Copy helper and its LLVM-managed deps next to the main test binary.
   HELPER_BASE="$(basename "$HELPER")"
   cp -f "$HELPER" "$TMPDIR/$HELPER_BASE"
   chmod +w "$TMPDIR/$HELPER_BASE" || true
-  HELPER_NEEDED="$(
+  HELPER_SANITIZER_NEEDED="$(
     /usr/bin/otool -L "$HELPER" \
       | awk '{print $1}' \
       | grep -E 'libclang_rt\..*_osx_dynamic\.dylib$' \
       || true
   )"
-  copy_needed_libs "$HELPER_NEEDED"
+  HELPER_CXX_RUNTIME_NEEDED="$(
+    /usr/bin/otool -L "$HELPER" \
+      | awk '{print $1}' \
+      | grep -E '@rpath/lib(c\+\+|c\+\+abi|unwind)\.1\.dylib$' \
+      || true
+  )"
+  copy_needed_libs "$HELPER_SANITIZER_NEEDED" "$RUNTIME_DIR"
+  copy_needed_libs "$HELPER_CXX_RUNTIME_NEEDED" "$CXX_RUNTIME_DIR"
   /usr/bin/install_name_tool -add_rpath "@loader_path" "$TMPDIR/$HELPER_BASE" 2>/dev/null || true
   # Tests consult this env var to find the helper; see runfiles_support.hpp.
   export PROCLY_HELPER_PATH="$TMPDIR/$HELPER_BASE"

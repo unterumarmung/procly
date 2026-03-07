@@ -24,18 +24,24 @@ if ! /usr/bin/readelf -d "$BIN" 2>/dev/null | grep -q 'libclang_rt\.ubsan_standa
   exec "$BIN" "$@"
 fi
 
-llvm_lib_dir="$(resolve_runfile "llvm_toolchain_llvm/lib/clang/20/lib" || true)"
-if [[ -z "$llvm_lib_dir" ]]; then
-  llvm_lib_dir="$(resolve_runfile "external/llvm_toolchain_llvm/lib/clang/20/lib" || true)"
-fi
-if [[ -z "$llvm_lib_dir" ]]; then
-  echo "failed to locate llvm toolchain runtime in runfiles" >&2
-  exit 1
+CLANG="$(resolve_runfile "llvm_toolchain_llvm/bin/clang" || true)"
+if [[ -z "$CLANG" ]]; then
+  CLANG="$(resolve_runfile "external/llvm_toolchain_llvm/bin/clang" || true)"
 fi
 
-ubsan_so="$(/usr/bin/find "$llvm_lib_dir" -name 'libclang_rt.ubsan_standalone.so' -print -quit)"
+ubsan_so=""
+if [[ -n "$CLANG" ]]; then
+  LLVM_PREFIX="$(cd "$(dirname "$CLANG")/.." && pwd)"
+  llvm_lib_dir="$(/usr/bin/find "$LLVM_PREFIX/lib/clang" -mindepth 2 -maxdepth 2 -type d -name lib -print -quit 2>/dev/null)"
+  if [[ -n "$llvm_lib_dir" ]]; then
+    ubsan_so="$(/usr/bin/find "$llvm_lib_dir" -name 'libclang_rt.ubsan_standalone.so' -print -quit)"
+  fi
+fi
 if [[ -z "$ubsan_so" ]]; then
-  echo "failed to locate libclang_rt.ubsan_standalone.so under $llvm_lib_dir" >&2
+  ubsan_so="$(resolve_runfile_suffix "libclang_rt.ubsan_standalone.so" || true)"
+fi
+if [[ -z "$ubsan_so" ]]; then
+  echo "failed to locate libclang_rt.ubsan_standalone.so in runfiles" >&2
   exit 1
 fi
 

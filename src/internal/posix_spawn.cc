@@ -34,7 +34,7 @@ bool can_use_posix_spawn(const SpawnSpec& spec) {
 }
 
 SpawnStrategy select_spawn_strategy(const SpawnSpec& spec) {
-#if defined(PROCLY_FORCE_FORK)
+#ifdef PROCLY_FORCE_FORK
   (void)spec;
   return SpawnStrategy::fork_exec;
 #elif defined(PROCLY_FORCE_POSIX_SPAWN)

@@ -15,6 +15,13 @@ sh_binary(
     srcs = ["linux_sanitizer_run_under.sh"],
     data = [
         ":sanitizer_runfiles_resolve.sh",
+        "@llvm_toolchain_llvm//:clang",
         "@llvm_toolchain_llvm//:lib_legacy",
     ],
+)
+
+sh_test(
+    name = "sanitizer_runfiles_resolve_test",
+    srcs = ["sanitizer_runfiles_resolve_test.sh"],
+    data = [":sanitizer_runfiles_resolve.sh"],
 )
