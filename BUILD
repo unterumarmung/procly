@@ -85,3 +85,12 @@ cc_library(
     includes = PROCLY_INCLUDES,
     visibility = PROCLY_PUBLIC_VISIBILITY,
 )
+
+cc_library(
+    name = "procly_cxx17",
+    srcs = PROCLY_SRCS,
+    hdrs = PROCLY_HDRS,
+    copts = ["-std=c++17"],
+    includes = PROCLY_INCLUDES,
+    visibility = PROCLY_PUBLIC_VISIBILITY,
+)

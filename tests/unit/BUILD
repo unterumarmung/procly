@@ -1,6 +1,16 @@
 load("@rules_cc//cc:defs.bzl", "cc_test")
 
 cc_test(
+    name = "cxx17_smoke_test",
+    srcs = ["cxx17_smoke_test.cc"],
+    copts = ["-std=c++17"],
+    deps = [
+        "//:procly_cxx17",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "result_test",
     srcs = ["result_test.cc"],
     deps = [
@@ -114,6 +124,7 @@ test_suite(
     tests = [
         ":backend_injection_test",
         ":concurrent_use_contract_test",
+        ":cxx17_smoke_test",
         ":io_drain_test",
         ":lowering_test",
         ":pipe_test",
