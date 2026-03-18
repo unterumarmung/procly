@@ -56,7 +56,8 @@ std::vector<int> list_open_fds() {
       fds.push_back(fd);
     }
     ::closedir(dir);
-    std::ranges::sort(fds);
+    // NOLINTNEXTLINE(modernize-use-ranges): keep C++17 compatibility in the main library target.
+    std::sort(fds.begin(), fds.end());
     return fds;
   }
 #endif
@@ -70,7 +71,8 @@ std::vector<int> list_open_fds() {
       fds.push_back(fd);
     }
   }
-  std::ranges::sort(fds);
+  // NOLINTNEXTLINE(modernize-use-ranges): keep C++17 compatibility in the main library target.
+  std::sort(fds.begin(), fds.end());
   return fds;
 }
 
@@ -81,7 +83,8 @@ Result<void> add_close_actions_for_inherited_fds(posix_spawn_file_actions_t* act
     if (fd <= STDERR_FILENO) {
       continue;
     }
-    if (closed_fds->contains(fd)) {
+    // NOLINTNEXTLINE(readability-container-contains): keep C++17 compatibility in the main library target.
+    if (closed_fds->find(fd) != closed_fds->end()) {
       continue;
     }
     int rc = posix_spawn_file_actions_addclose(actions, fd);
@@ -332,7 +335,8 @@ Result<Spawned> spawn_posix_spawnp(const SpawnSpec& spec) {
     if (fd < 0) {
       return {};
     }
-    if (closed_fds.contains(fd)) {
+    // NOLINTNEXTLINE(readability-container-contains): keep C++17 compatibility in the main library target.
+    if (closed_fds.find(fd) != closed_fds.end()) {
       return {};
     }
     auto rc = posix_spawn_file_actions_addclose(&state.actions, fd);
