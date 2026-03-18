@@ -255,6 +255,110 @@ class PipeLifecycleBackend final : public internal::Backend {
 };
 #endif
 
+class DrainFailureBackend final : public internal::Backend {
+ public:
+  Result<internal::Spawned> spawn(const internal::SpawnSpec& spec) override {
+    internal::Spawned spawned;
+    spawned.pid = next_pid_++;
+    if (spec.stdout_spec.kind == internal::StdioSpec::Kind::piped) {
+      spawned.stdout_fd = kInvalidStdoutFd;
+    }
+    if (spec.stderr_spec.kind == internal::StdioSpec::Kind::piped) {
+      spawned.stderr_fd = kInvalidStderrFd;
+    }
+    return spawned;
+  }
+
+  Result<WaitResult> wait(internal::Spawned& spawned,
+                          std::optional<std::chrono::milliseconds> timeout,
+                          std::chrono::milliseconds kill_grace) override {
+    if (spawned.terminal_result) {
+      return *spawned.terminal_result;
+    }
+    wait_calls.push_back({spawned.pid, timeout, kill_grace});
+    internal::cache_terminal_result(spawned, WaitResult{.status = ExitStatus::exited(0)});
+    return *spawned.terminal_result;
+  }
+
+  Result<std::optional<ExitStatus>> try_wait(internal::Spawned& spawned) override {
+    (void)spawned;
+    return std::optional<ExitStatus>{};
+  }
+
+  Result<void> terminate(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> kill(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> signal(internal::Spawned& spawned, int signo) override {
+    (void)spawned;
+    (void)signo;
+    return {};
+  }
+
+  std::vector<FakeBackend::WaitCall> wait_calls;
+
+ private:
+  static constexpr int kInvalidStdoutFd = 123456;
+  static constexpr int kInvalidStderrFd = 123457;
+  int next_pid_ = 101;
+};
+
+class PipelineWaitFailureBackend final : public internal::Backend {
+ public:
+  Result<internal::Spawned> spawn(const internal::SpawnSpec& spec) override {
+    (void)spec;
+    internal::Spawned spawned;
+    spawned.pid = next_pid_++;
+    return spawned;
+  }
+
+  Result<WaitResult> wait(internal::Spawned& spawned,
+                          std::optional<std::chrono::milliseconds> timeout,
+                          std::chrono::milliseconds kill_grace) override {
+    wait_calls.push_back({spawned.pid, timeout, kill_grace});
+    if (wait_calls.size() == 2) {
+      return Error{make_error_code(errc::wait_failed), "wait"};
+    }
+    if (spawned.terminal_result) {
+      return *spawned.terminal_result;
+    }
+    internal::cache_terminal_result(spawned, WaitResult{.status = ExitStatus::exited(0)});
+    return *spawned.terminal_result;
+  }
+
+  Result<std::optional<ExitStatus>> try_wait(internal::Spawned& spawned) override {
+    (void)spawned;
+    return std::optional<ExitStatus>{};
+  }
+
+  Result<void> terminate(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> kill(internal::Spawned& spawned) override {
+    (void)spawned;
+    return {};
+  }
+
+  Result<void> signal(internal::Spawned& spawned, int signo) override {
+    (void)spawned;
+    (void)signo;
+    return {};
+  }
+
+  std::vector<FakeBackend::WaitCall> wait_calls;
+
+ private:
+  int next_pid_ = 101;
+};
+
 }  // namespace
 
 TEST(BackendInjectionTest, ScopedOverrideRestoresDefault) {
@@ -575,6 +679,87 @@ TEST(BackendInjectionTest, CommandOutputUsesInjectedBackend) {
   EXPECT_EQ(output->status.code().value(), 3);
   EXPECT_EQ(backend.spawn_calls, 1);
   EXPECT_EQ(backend.wait_calls.size(), 1u);
+}
+
+TEST(BackendInjectionTest, CommandStatusDrainFailureStillReapsChild) {
+  DrainFailureBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Command cmd("echo");
+  cmd.stdout(Stdio::piped());
+
+  auto status = cmd.status();
+  ASSERT_FALSE(status.has_value());
+  EXPECT_EQ(status.error().code.category(), std::system_category());
+  EXPECT_EQ(backend.wait_calls.size(), 1u);
+  if (!backend.wait_calls.empty()) {
+    EXPECT_EQ(backend.wait_calls[0].pid, 101);
+  }
+}
+
+TEST(BackendInjectionTest, CommandOutputDrainFailureStillReapsChild) {
+  DrainFailureBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Command cmd("echo");
+  auto output = cmd.output();
+  ASSERT_FALSE(output.has_value());
+  EXPECT_EQ(output.error().code.category(), std::system_category());
+  EXPECT_EQ(backend.wait_calls.size(), 1u);
+  if (!backend.wait_calls.empty()) {
+    EXPECT_EQ(backend.wait_calls[0].pid, 101);
+  }
+}
+
+TEST(BackendInjectionTest, PipelineStatusDrainFailureStillReapsAllStages) {
+  DrainFailureBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  Pipeline pipeline = Command("echo") | Command("cat");
+  pipeline.stdout(Stdio::piped());
+
+  auto status = pipeline.status();
+  ASSERT_FALSE(status.has_value());
+  EXPECT_EQ(status.error().code.category(), std::system_category());
+
+  std::vector<int> waited_pids;
+  for (const auto& wait_call : backend.wait_calls) {
+    waited_pids.push_back(wait_call.pid);
+  }
+  EXPECT_EQ(waited_pids, (std::vector<int>{101, 102}));
+}
+
+TEST(BackendInjectionTest, PipelineOutputDrainFailureStillReapsAllStages) {
+  DrainFailureBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  auto output = (Command("echo") | Command("cat")).output();
+  ASSERT_FALSE(output.has_value());
+  EXPECT_EQ(output.error().code.category(), std::system_category());
+
+  std::vector<int> waited_pids;
+  for (const auto& wait_call : backend.wait_calls) {
+    waited_pids.push_back(wait_call.pid);
+  }
+  EXPECT_EQ(waited_pids, (std::vector<int>{101, 102}));
+}
+
+TEST(BackendInjectionTest, PipelineWaitErrorStillReapsRemainingStages) {
+  PipelineWaitFailureBackend backend;
+  internal::ScopedBackendOverride override_backend(backend);
+
+  auto child_result = (Command("echo") | Command("cat") | Command("wc")).spawn();
+  ASSERT_TRUE(child_result.has_value());
+
+  auto wait_result = child_result->wait();
+  ASSERT_FALSE(wait_result.has_value());
+  EXPECT_EQ(wait_result.error().code, make_error_code(errc::wait_failed));
+
+  std::vector<int> waited_pids;
+  for (const auto& wait_call : backend.wait_calls) {
+    waited_pids.push_back(wait_call.pid);
+  }
+  EXPECT_EQ(waited_pids, (std::vector<int>{101, 102, 103}));
 }
 
 #if PROCLY_PLATFORM_POSIX
