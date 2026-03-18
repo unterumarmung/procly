@@ -67,6 +67,81 @@ struct PipelineChild::Impl {
   std::optional<PipeReader> stdout_pipe;
   std::optional<PipeReader> stderr_pipe;
   internal::ConcurrentUseGuard concurrent_use;
+
+  void close_owned_pipes() noexcept {
+    if (stdin_pipe) {
+      stdin_pipe->close();
+      stdin_pipe.reset();
+    }
+    if (!spawned.empty()) {
+      spawned.front().stdin_fd.reset();
+    }
+
+    if (stdout_pipe) {
+      stdout_pipe->close();
+      stdout_pipe.reset();
+    }
+    if (!spawned.empty()) {
+      spawned.back().stdout_fd.reset();
+    }
+
+    if (stderr_pipe) {
+      stderr_pipe->close();
+      stderr_pipe.reset();
+    }
+    if (!spawned.empty()) {
+      spawned.back().stderr_fd.reset();
+    }
+  }
+
+  void cleanup_on_drop() noexcept {
+    close_owned_pipes();
+    for (auto& stage : spawned) {
+      if (stage.terminal_result || stage.pid <= 0) {
+        continue;
+      }
+      (void)internal::backend_for(stage).wait(stage, std::nullopt, std::chrono::milliseconds(0));
+    }
+  }
+
+  Result<PipelineStatus> wait_for_completion() {
+    PipelineStatus status;
+    status.stages.reserve(spawned.size());
+
+    std::optional<Error> first_error;
+    for (auto& stage : spawned) {
+      auto wait_result =
+          internal::backend_for(stage).wait(stage, std::nullopt, std::chrono::milliseconds(0));
+      if (!wait_result) {
+        if (!first_error) {
+          first_error = wait_result.error();
+        }
+        continue;
+      }
+      status.stages.push_back(wait_result->status);
+    }
+
+    if (first_error) {
+      return *first_error;
+    }
+    if (status.stages.empty()) {
+      return Error{.code = make_error_code(errc::invalid_pipeline), .context = "wait"};
+    }
+
+    if (!pipefail) {
+      status.aggregate = status.stages.back();
+      return status;
+    }
+
+    for (auto it = status.stages.rbegin(); it != status.stages.rend(); ++it) {
+      if (!it->success()) {
+        status.aggregate = *it;
+        return status;
+      }
+    }
+    status.aggregate = status.stages.back();
+    return status;
+  }
 };
 
 void cleanup_partially_spawned_pipeline(std::vector<internal::Spawned>* spawned,
@@ -223,6 +298,7 @@ Result<ExitStatus> Pipeline::status() const {
     auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
                                          stderr_pipe ? &*stderr_pipe : nullptr);
     if (!drained) {
+      (void)child_result->wait();
       return drained.error();
     }
   }
@@ -253,6 +329,7 @@ Result<Output> Pipeline::output() const {
   auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
                                        stderr_pipe ? &*stderr_pipe : nullptr);
   if (!drained) {
+    (void)child_result->wait();
     return drained.error();
   }
 
@@ -291,7 +368,14 @@ PipelineChild& PipelineChild::operator=(PipelineChild&& other) noexcept {
   return *this;
 }
 
-PipelineChild::~PipelineChild() = default;
+PipelineChild::~PipelineChild() {
+  if (!impl_) {
+    return;
+  }
+  auto use = impl_->concurrent_use.enter("PipelineChild");
+  (void)use;
+  impl_->cleanup_on_drop();
+}
 
 std::optional<PipeWriter> PipelineChild::take_stdin() noexcept {
   if (!impl_) {
@@ -301,6 +385,9 @@ std::optional<PipeWriter> PipelineChild::take_stdin() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stdin_pipe);
   impl_->stdin_pipe.reset();
+  if (!impl_->spawned.empty()) {
+    impl_->spawned.front().stdin_fd.reset();
+  }
   return pipe;
 }
 
@@ -312,6 +399,9 @@ std::optional<PipeReader> PipelineChild::take_stdout() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stdout_pipe);
   impl_->stdout_pipe.reset();
+  if (!impl_->spawned.empty()) {
+    impl_->spawned.back().stdout_fd.reset();
+  }
   return pipe;
 }
 
@@ -323,6 +413,9 @@ std::optional<PipeReader> PipelineChild::take_stderr() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stderr_pipe);
   impl_->stderr_pipe.reset();
+  if (!impl_->spawned.empty()) {
+    impl_->spawned.back().stderr_fd.reset();
+  }
   return pipe;
 }
 
@@ -332,36 +425,7 @@ Result<PipelineStatus> PipelineChild::wait() {
   }
   auto use = impl_->concurrent_use.enter("PipelineChild");
   (void)use;
-
-  PipelineStatus status;
-  status.stages.reserve(impl_->spawned.size());
-
-  for (auto& spawned : impl_->spawned) {
-    auto wait_result =
-        internal::backend_for(spawned).wait(spawned, std::nullopt, std::chrono::milliseconds(0));
-    if (!wait_result) {
-      return wait_result.error();
-    }
-    status.stages.push_back(wait_result->status);
-  }
-
-  if (status.stages.empty()) {
-    return Error{.code = make_error_code(errc::invalid_pipeline), .context = "wait"};
-  }
-
-  if (!impl_->pipefail) {
-    status.aggregate = status.stages.back();
-    return status;
-  }
-
-  for (auto it = status.stages.rbegin(); it != status.stages.rend(); ++it) {
-    if (!it->success()) {
-      status.aggregate = *it;
-      return status;
-    }
-  }
-  status.aggregate = status.stages.back();
-  return status;
+  return impl_->wait_for_completion();
 }
 
 Result<void> PipelineChild::terminate() {

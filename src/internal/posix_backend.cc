@@ -182,16 +182,12 @@ void reap_child_after_exec_failure(pid_t pid) {
   }
 }
 
-Result<int> open_null(bool read_only) {
+int open_null_raw(bool read_only) {
   int flags = read_only ? O_RDONLY : O_WRONLY;
 #if defined(O_CLOEXEC)
   flags |= O_CLOEXEC;
 #endif
-  int fd = ::open("/dev/null", flags);
-  if (fd == -1) {
-    return make_errno_error("open(/dev/null)");
-  }
-  return fd;
+  return ::open("/dev/null", flags);
 }
 
 int open_flags_for(OpenMode mode) {
@@ -208,19 +204,15 @@ int open_flags_for(OpenMode mode) {
   return O_RDONLY;
 }
 
-Result<int> open_file(const std::filesystem::path& path, OpenMode mode,
-                      std::optional<FilePerms> perms) {
+int open_file_raw(const std::filesystem::path& path, OpenMode mode,
+                  std::optional<FilePerms> perms) {
   int flags = open_flags_for(mode);
 #if defined(O_CLOEXEC)
   flags |= O_CLOEXEC;
 #endif
   constexpr int kFileMode = 0666;
-  int fd = ::open(path.c_str(), flags,
-                  static_cast<int>(perms.value_or(static_cast<FilePerms>(kFileMode))));
-  if (fd == -1) {
-    return make_errno_error("open(file)");
-  }
-  return fd;
+  return ::open(path.c_str(), flags,
+                static_cast<int>(perms.value_or(static_cast<FilePerms>(kFileMode))));
 }
 
 ExitStatus to_exit_status(int status) {
@@ -546,35 +538,38 @@ class PosixBackend final : public Backend {
     int child_stdout = STDOUT_FILENO;
     int child_stderr = STDERR_FILENO;
 
-    auto open_for_spec = [&](const StdioSpec& spec, bool read_only, bool is_stdout,
-                             std::optional<int>& parent_fd) -> Result<int> {
-      switch (spec.kind) {
+    auto mark_closed = [&](int fd) {
+      for (int& opened_fd : opened_fds) {
+        if (opened_fd == fd) {
+          opened_fd = -1;
+          return;
+        }
+      }
+    };
+    auto cleanup_opened_fds = [&]() {
+      for (int& fd : opened_fds) {
+        if (fd >= 0) {
+          ::close(fd);
+          fd = -1;
+        }
+      }
+    };
+    auto cleanup_and_return = [&](const Error& error) -> Result<Spawned> {
+      cleanup_opened_fds();
+      parent_stdin.reset();
+      parent_stdout.reset();
+      parent_stderr.reset();
+      return error;
+    };
+    auto prepare_for_spec = [&](const StdioSpec& stdio, int target_fd, bool read_only,
+                                std::optional<int>& parent_fd) -> Result<int> {
+      switch (stdio.kind) {
         case StdioSpec::Kind::inherit:
-          if (read_only) {
-            return STDIN_FILENO;
-          }
-          if (is_stdout) {
-            return STDOUT_FILENO;
-          }
-          return STDERR_FILENO;
-        case StdioSpec::Kind::null: {
-          auto fd = open_null(read_only);
-          if (!fd) {
-            return fd.error();
-          }
-          opened_fds.push_back(fd.value());
-          return fd.value();
-        }
-        case StdioSpec::Kind::file: {
-          auto fd = open_file(spec.path, spec.mode, spec.perms);
-          if (!fd) {
-            return fd.error();
-          }
-          opened_fds.push_back(fd.value());
-          return fd.value();
-        }
+        case StdioSpec::Kind::null:
+        case StdioSpec::Kind::file:
+          return target_fd;
         case StdioSpec::Kind::fd:
-          return spec.fd;
+          return stdio.fd;
         case StdioSpec::Kind::piped: {
           auto pipe_result = create_pipe();
           if (!pipe_result) {
@@ -598,24 +593,24 @@ class PosixBackend final : public Backend {
       return Error{.code = make_error_code(errc::invalid_stdio), .context = "stdio"};
     };
 
-    auto stdout_fd = open_for_spec(spec.stdout_spec, false, true, parent_stdout);
+    auto stdout_fd = prepare_for_spec(spec.stdout_spec, STDOUT_FILENO, false, parent_stdout);
     if (!stdout_fd) {
-      return stdout_fd.error();
+      return cleanup_and_return(stdout_fd.error());
     }
     child_stdout = stdout_fd.value();
 
-    auto stdin_fd = open_for_spec(spec.stdin_spec, true, false, parent_stdin);
+    auto stdin_fd = prepare_for_spec(spec.stdin_spec, STDIN_FILENO, true, parent_stdin);
     if (!stdin_fd) {
-      return stdin_fd.error();
+      return cleanup_and_return(stdin_fd.error());
     }
     child_stdin = stdin_fd.value();
 
     if (spec.stderr_spec.kind == StdioSpec::Kind::dup_stdout) {
       child_stderr = child_stdout;
     } else {
-      auto stderr_fd = open_for_spec(spec.stderr_spec, false, false, parent_stderr);
+      auto stderr_fd = prepare_for_spec(spec.stderr_spec, STDERR_FILENO, false, parent_stderr);
       if (!stderr_fd) {
-        return stderr_fd.error();
+        return cleanup_and_return(stderr_fd.error());
       }
       child_stderr = stderr_fd.value();
     }
@@ -623,7 +618,7 @@ class PosixBackend final : public Backend {
     // Error pipe communicates child setup/exec failures back to the parent.
     auto error_pipe_result = create_pipe();
     if (!error_pipe_result) {
-      return error_pipe_result.error();
+      return cleanup_and_return(error_pipe_result.error());
     }
     auto [error_read, error_write] = std::move(error_pipe_result.value());
     int error_read_fd = error_read.release();
@@ -651,71 +646,100 @@ class PosixBackend final : public Backend {
 
     pid_t pid = ::fork();
     if (pid == -1) {
-      for (int fd : opened_fds) {
-        ::close(fd);
-      }
-      return make_errno_error("fork");
+      return cleanup_and_return(make_errno_error("fork"));
     }
 
     if (pid == 0) {
+      auto fail_child = [&](int err) {
+        (void)::write(error_write_fd, &err, sizeof(err));
+        _exit(kExecFailureExitCode);
+      };
+      auto apply_stdio = [&](const StdioSpec& stdio, int prepared_fd, int target_fd,
+                             bool read_only) {
+        switch (stdio.kind) {
+          case StdioSpec::Kind::inherit:
+            return;
+          case StdioSpec::Kind::null: {
+            int fd = open_null_raw(read_only);
+            if (fd == -1) {
+              fail_child(errno);
+            }
+            if (fd != target_fd && ::dup2(fd, target_fd) == -1) {
+              int err = errno;
+              ::close(fd);
+              fail_child(err);
+            }
+            if (fd != target_fd) {
+              ::close(fd);
+            }
+            return;
+          }
+          case StdioSpec::Kind::file: {
+            int fd = open_file_raw(stdio.path, stdio.mode, stdio.perms);
+            if (fd == -1) {
+              fail_child(errno);
+            }
+            if (fd != target_fd && ::dup2(fd, target_fd) == -1) {
+              int err = errno;
+              ::close(fd);
+              fail_child(err);
+            }
+            if (fd != target_fd) {
+              ::close(fd);
+            }
+            return;
+          }
+          case StdioSpec::Kind::fd:
+          case StdioSpec::Kind::piped:
+            if (prepared_fd != target_fd && ::dup2(prepared_fd, target_fd) == -1) {
+              fail_child(errno);
+            }
+            return;
+          case StdioSpec::Kind::dup_stdout:
+            if (::dup2(STDOUT_FILENO, target_fd) == -1) {
+              fail_child(errno);
+            }
+            return;
+        }
+      };
+
       if (error_read_fd >= 0) {
         ::close(error_read_fd);
       }
 
       if (spec.opts.new_process_group) {
         if (::setpgid(0, 0) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
+          fail_child(errno);
         }
       } else if (spec.process_group) {
         if (::setpgid(0, *spec.process_group) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
+          fail_child(errno);
         }
       }
 
       if (spec.cwd) {
         if (::chdir(spec.cwd->c_str()) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
+          fail_child(errno);
         }
       }
 
-      if (child_stdin != STDIN_FILENO) {
-        if (::dup2(child_stdin, STDIN_FILENO) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
-        }
+      if (::access(exec_path.c_str(), X_OK) == -1) {
+        fail_child(errno);
       }
-      if (child_stdout != STDOUT_FILENO) {
-        if (::dup2(child_stdout, STDOUT_FILENO) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
-        }
-      }
-      if (child_stderr != STDERR_FILENO) {
-        if (::dup2(child_stderr, STDERR_FILENO) == -1) {
-          int err = errno;
-          ::write(error_write_fd, &err, sizeof(err));
-          _exit(kExecFailureExitCode);
-        }
-      }
+
+      apply_stdio(spec.stdin_spec, child_stdin, STDIN_FILENO, true);
+      apply_stdio(spec.stdout_spec, child_stdout, STDOUT_FILENO, false);
+      apply_stdio(spec.stderr_spec, child_stderr, STDERR_FILENO, false);
 
       close_inherited_fds_after_fork(error_write_fd);
 
       ::execve(exec_path.c_str(), argv_c.data(), envp_c.data());
 
-      int err = errno;
-      ::write(error_write_fd, &err, sizeof(err));
-      _exit(kExecFailureExitCode);
+      fail_child(errno);
     }
 
     ::close(error_write_fd);
+    mark_closed(error_write_fd);
     int child_errno = 0;
     ssize_t read_result = -1;
     while (read_result == -1) {
@@ -725,25 +749,14 @@ class PosixBackend final : public Backend {
       }
     }
     ::close(error_read_fd);
+    mark_closed(error_read_fd);
     if (read_result == -1) {
-      for (int fd : opened_fds) {
-        if (fd == error_read_fd || fd == error_write_fd) {
-          continue;
-        }
-        ::close(fd);
-      }
-      return make_errno_error("read");
+      return cleanup_and_return(make_errno_error("read"));
     }
     if (read_result > 0) {
       reap_child_after_exec_failure(pid);
-      for (int fd : opened_fds) {
-        if (fd == error_read_fd || fd == error_write_fd) {
-          continue;
-        }
-        ::close(fd);
-      }
-      return Error{.code = std::error_code(child_errno, std::system_category()),
-                   .context = "spawn"};
+      return cleanup_and_return(
+          Error{.code = std::error_code(child_errno, std::system_category()), .context = "spawn"});
     }
 
     Spawned spawned;
@@ -760,7 +773,7 @@ class PosixBackend final : public Backend {
     spawned.stderr_fd = parent_stderr;
 
     for (int fd : opened_fds) {
-      if (fd == error_read_fd || fd == error_write_fd) {
+      if (fd < 0) {
         continue;
       }
       bool keep = (parent_stdin && fd == *parent_stdin) ||

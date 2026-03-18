@@ -312,6 +312,35 @@ bool wait_for_process_exit(pid_t pid, std::chrono::milliseconds timeout) {
   return false;
 }
 
+struct WaitPidCheck {
+  pid_t rv;
+  int error;
+};
+
+WaitPidCheck waitpid_nohang(pid_t pid) {
+  int status = 0;
+  errno = 0;
+  pid_t rv = ::waitpid(pid, &status, WNOHANG);
+  return WaitPidCheck{
+      .rv = rv,
+      .error = (rv == -1) ? errno : 0,
+  };
+}
+
+void cleanup_pid_after_waitpid_check(pid_t pid, const WaitPidCheck& check) {
+  if (check.rv != 0) {
+    return;
+  }
+
+  (void)::kill(pid, SIGKILL);
+  int status = 0;
+  while (::waitpid(pid, &status, 0) == -1) {
+    if (errno != EINTR) {
+      break;
+    }
+  }
+}
+
 #if PROCLY_HAS_THREAD_SANITIZER
 constexpr std::chrono::milliseconds kPidFileWaitTimeout{5000};
 constexpr std::chrono::milliseconds kProcessExitWaitTimeout{5000};
@@ -613,6 +642,47 @@ TEST(CommandIntegrationTest, ForkPathClosesFdsOpenedBetweenPreparationAndFork) {
   std::filesystem::remove(fd_path, remove_ec);
 }
 
+TEST(CommandIntegrationTest, ForkPathDoesNotLeakFdsWhenStdinSetupFails) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::size_t before = count_open_fds();
+  for (int i = 0; i < 50; ++i) {
+    std::filesystem::path missing_path = unique_temp_path("missing_stdin_parent") / "stdin.txt";
+
+    Command cmd(helper);
+    cmd.stdout(Stdio::piped());
+    cmd.stdin(Stdio::file(missing_path));
+
+    auto child_result = cmd.spawn();
+    ASSERT_FALSE(child_result.has_value());
+    EXPECT_EQ(child_result.error().code.category(), std::system_category());
+  }
+  std::size_t after = count_open_fds();
+  EXPECT_EQ(after, before);
+}
+
+TEST(CommandIntegrationTest, ForkPathDoesNotLeakFdsWhenStderrSetupFails) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::size_t before = count_open_fds();
+  for (int i = 0; i < 50; ++i) {
+    std::filesystem::path missing_path = unique_temp_path("missing_stderr_parent") / "stderr.txt";
+
+    Command cmd(helper);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::file(missing_path));
+
+    auto child_result = cmd.spawn();
+    ASSERT_FALSE(child_result.has_value());
+    EXPECT_EQ(child_result.error().code.category(), std::system_category());
+  }
+  std::size_t after = count_open_fds();
+  EXPECT_EQ(after, before);
+}
+
 TEST(CommandIntegrationTest, ForkExecFailureReapsChildBeforeReturningError) {
   ScopedForkCapture fork_capture(/*inject_fd=*/false);
 
@@ -628,6 +698,51 @@ TEST(CommandIntegrationTest, ForkExecFailureReapsChildBeforeReturningError) {
   pid_t wait_result = ::waitpid(child_pid, &status, WNOHANG);
   EXPECT_EQ(wait_result, -1);
   EXPECT_EQ(errno, ECHILD);
+}
+
+TEST(CommandIntegrationTest, ForkPathExecFailureDoesNotTruncateRedirectionFile) {
+  std::filesystem::path out_path = unique_temp_path("fork_exec_failure_stdout");
+  std::error_code remove_ec;
+  std::filesystem::remove(out_path, remove_ec);
+
+  {
+    std::ofstream out_file(out_path, std::ios::binary);
+    ASSERT_TRUE(out_file.is_open());
+    out_file << "keepme";
+  }
+
+  Command cmd("/definitely/missing/procly_binary");
+  cmd.stdout(Stdio::file(out_path));
+  auto child_result = cmd.spawn();
+  ASSERT_FALSE(child_result.has_value());
+
+  EXPECT_EQ(read_file(out_path), "keepme");
+  std::filesystem::remove(out_path, remove_ec);
+}
+
+TEST(CommandIntegrationTest, ForkPathChildSetupFailureDoesNotTruncateRedirectionFile) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path out_path = unique_temp_path("fork_child_setup_failure_stdout");
+  std::filesystem::path missing_dir = unique_temp_path("missing_cwd_dir");
+  std::error_code remove_ec;
+  std::filesystem::remove(out_path, remove_ec);
+
+  {
+    std::ofstream out_file(out_path, std::ios::binary);
+    ASSERT_TRUE(out_file.is_open());
+    out_file << "keepme";
+  }
+
+  Command cmd(helper);
+  cmd.current_dir(missing_dir);
+  cmd.stdout(Stdio::file(out_path));
+  auto child_result = cmd.spawn();
+  ASSERT_FALSE(child_result.has_value());
+
+  EXPECT_EQ(read_file(out_path), "keepme");
+  std::filesystem::remove(out_path, remove_ec);
 }
 
 TEST(CommandIntegrationTest, ForkPathResolvesRelativeProgramUsingChildCwd) {
@@ -717,6 +832,129 @@ TEST(CommandIntegrationTest, TryWaitReturnsEmptyWhileRunning) {
     EXPECT_TRUE(wait_result->success());
   }
 }
+
+#if PROCLY_PLATFORM_POSIX
+TEST(CommandIntegrationTest, ChildDestructorReapsExitedProcess) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path pid_path = unique_temp_path("child_destructor_exited");
+  std::error_code remove_ec;
+  std::filesystem::remove(pid_path, remove_ec);
+
+  pid_t child_pid = -1;
+  {
+    Command cmd(helper);
+    cmd.arg("--pid-file").arg(pid_path.string());
+    cmd.arg("--sleep-ms").arg("20");
+
+    auto child_result = cmd.spawn();
+    ASSERT_TRUE(child_result.has_value())
+        << child_result.error().context << " " << child_result.error().code.message();
+
+    child_pid = wait_for_pid_file(pid_path, kPidFileWaitTimeout);
+    ASSERT_GT(child_pid, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  }
+
+  auto wait_check = waitpid_nohang(child_pid);
+  EXPECT_EQ(wait_check.rv, -1);
+  EXPECT_EQ(wait_check.error, ECHILD);
+  cleanup_pid_after_waitpid_check(child_pid, wait_check);
+
+  std::filesystem::remove(pid_path, remove_ec);
+}
+
+TEST(CommandIntegrationTest, ChildDestructorWaitsForRunningProcess) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path pid_path = unique_temp_path("child_destructor_running");
+  std::error_code remove_ec;
+  std::filesystem::remove(pid_path, remove_ec);
+
+  pid_t child_pid = -1;
+  auto start = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::milliseconds(0);
+  {
+    Command cmd(helper);
+    cmd.arg("--pid-file").arg(pid_path.string());
+    cmd.arg("--sleep-ms").arg("250");
+
+    auto child_result = cmd.spawn();
+    ASSERT_TRUE(child_result.has_value())
+        << child_result.error().context << " " << child_result.error().code.message();
+
+    child_pid = wait_for_pid_file(pid_path, kPidFileWaitTimeout);
+    ASSERT_GT(child_pid, 0);
+    start = std::chrono::steady_clock::now();
+  }
+  elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_GE(elapsed, std::chrono::milliseconds(200));
+
+  auto wait_check = waitpid_nohang(child_pid);
+  EXPECT_EQ(wait_check.rv, -1);
+  EXPECT_EQ(wait_check.error, ECHILD);
+  cleanup_pid_after_waitpid_check(child_pid, wait_check);
+
+  std::filesystem::remove(pid_path, remove_ec);
+}
+
+TEST(PipelineIntegrationTest, PipelineChildDestructorWaitsAndReapsStages) {
+  std::string helper = helper_path();
+  ASSERT_FALSE(helper.empty());
+
+  std::filesystem::path first_pid_path = unique_temp_path("pipeline_destructor_first");
+  std::filesystem::path second_pid_path = unique_temp_path("pipeline_destructor_second");
+  std::error_code remove_ec;
+  std::filesystem::remove(first_pid_path, remove_ec);
+  std::filesystem::remove(second_pid_path, remove_ec);
+
+  pid_t first_pid = -1;
+  pid_t second_pid = -1;
+  auto start = std::chrono::steady_clock::now();
+  auto elapsed = std::chrono::milliseconds(0);
+  {
+    Command first(helper);
+    first.arg("--pid-file").arg(first_pid_path.string());
+    first.arg("--sleep-ms").arg("250");
+    first.arg("--stdout-bytes").arg("1");
+
+    Command second(helper);
+    second.arg("--pid-file").arg(second_pid_path.string());
+    second.arg("--consume-stdin");
+
+    auto child_result = (first | second).spawn();
+    ASSERT_TRUE(child_result.has_value())
+        << child_result.error().context << " " << child_result.error().code.message();
+
+    first_pid = wait_for_pid_file(first_pid_path, kPidFileWaitTimeout);
+    second_pid = wait_for_pid_file(second_pid_path, kPidFileWaitTimeout);
+    ASSERT_GT(first_pid, 0);
+    ASSERT_GT(second_pid, 0);
+    start = std::chrono::steady_clock::now();
+  }
+  elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_GE(elapsed, std::chrono::milliseconds(200));
+
+  auto first_wait_check = waitpid_nohang(first_pid);
+  EXPECT_EQ(first_wait_check.rv, -1);
+  EXPECT_EQ(first_wait_check.error, ECHILD);
+  cleanup_pid_after_waitpid_check(first_pid, first_wait_check);
+
+  auto second_wait_check = waitpid_nohang(second_pid);
+  EXPECT_EQ(second_wait_check.rv, -1);
+  EXPECT_EQ(second_wait_check.error, ECHILD);
+  cleanup_pid_after_waitpid_check(second_pid, second_wait_check);
+
+  std::filesystem::remove(first_pid_path, remove_ec);
+  std::filesystem::remove(second_pid_path, remove_ec);
+}
+#endif
 
 TEST(CommandIntegrationTest, StdinPipeRoundTrip) {
   std::string helper = helper_path();
