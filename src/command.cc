@@ -168,6 +168,7 @@ Result<ExitStatus> Command::status() const {
     auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
                                          stderr_pipe ? &*stderr_pipe : nullptr);
     if (!drained) {
+      (void)child.wait();
       return drained.error();
     }
   }
@@ -195,6 +196,7 @@ Result<Output> Command::output() const {
   auto drained = internal::drain_pipes(stdout_pipe ? &*stdout_pipe : nullptr,
                                        stderr_pipe ? &*stderr_pipe : nullptr);
   if (!drained) {
+    (void)child.wait();
     return drained.error();
   }
 
