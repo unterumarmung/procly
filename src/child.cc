@@ -20,6 +20,34 @@ struct Child::Impl {
     }
   }
 
+  void close_owned_pipes() noexcept {
+    if (stdin_pipe) {
+      stdin_pipe->close();
+      stdin_pipe.reset();
+    }
+    spawned_.stdin_fd.reset();
+
+    if (stdout_pipe) {
+      stdout_pipe->close();
+      stdout_pipe.reset();
+    }
+    spawned_.stdout_fd.reset();
+
+    if (stderr_pipe) {
+      stderr_pipe->close();
+      stderr_pipe.reset();
+    }
+    spawned_.stderr_fd.reset();
+  }
+
+  void cleanup_on_drop() noexcept {
+    close_owned_pipes();
+    if (spawned_.terminal_result || spawned_.pid <= 0) {
+      return;
+    }
+    (void)internal::backend_for(spawned_).wait(spawned_, std::nullopt, std::chrono::milliseconds(0));
+  }
+
   internal::Spawned spawned_;
   std::optional<PipeWriter> stdin_pipe;
   std::optional<PipeReader> stdout_pipe;
@@ -50,7 +78,14 @@ Child& Child::operator=(Child&& other) noexcept {
   return *this;
 }
 
-Child::~Child() = default;
+Child::~Child() {
+  if (!impl_) {
+    return;
+  }
+  auto use = impl_->concurrent_use.enter("Child");
+  (void)use;
+  impl_->cleanup_on_drop();
+}
 
 namespace internal {
 
@@ -79,6 +114,7 @@ std::optional<PipeWriter> Child::take_stdin() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stdin_pipe);
   impl_->stdin_pipe.reset();
+  impl_->spawned_.stdin_fd.reset();
   return pipe;
 }
 
@@ -90,6 +126,7 @@ std::optional<PipeReader> Child::take_stdout() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stdout_pipe);
   impl_->stdout_pipe.reset();
+  impl_->spawned_.stdout_fd.reset();
   return pipe;
 }
 
@@ -101,6 +138,7 @@ std::optional<PipeReader> Child::take_stderr() noexcept {
   (void)use;
   auto pipe = std::move(impl_->stderr_pipe);
   impl_->stderr_pipe.reset();
+  impl_->spawned_.stderr_fd.reset();
   return pipe;
 }
 
